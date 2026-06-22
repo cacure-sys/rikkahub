@@ -375,16 +375,6 @@ class GenerationHandler(
                     append(effectiveSystemPrompt)
                 }
 
-                // 记忆
-                if (assistant.enableMemory) {
-                    appendLine()
-                    append(buildMemoryPrompt(memories = memories))
-                }
-                if (assistant.enableRecentChatsReference) {
-                    appendLine()
-                    append(buildRecentChatsPrompt(assistant, conversationRepo))
-                }
-
                 // 工具prompt
                 tools.forEach { tool ->
                     appendLine()
@@ -393,6 +383,22 @@ class GenerationHandler(
             }
             if (system.isNotBlank()) add(UIMessage.system(prompt = system))
             addAll(messages.limitContext(assistant.contextMessageSize))
+
+            // 动态上下文（记忆/最近对话）作为独立消息插在对话末尾附近，不污染系统提示词前缀
+            val dynamicContext = buildString {
+                if (assistant.enableMemory) {
+                    append(buildMemoryPrompt(memories = memories))
+                }
+                if (assistant.enableRecentChatsReference) {
+                    if (isNotBlank()) appendLine()
+                    append(buildRecentChatsPrompt(assistant, conversationRepo))
+                }
+            }
+            if (dynamicContext.isNotBlank()) {
+                // 插在最后一条消息之前
+                val insertIndex = (size - 1).coerceAtLeast(1)
+                add(insertIndex, UIMessage.system(prompt = dynamicContext))
+            }
         }.transforms(
             transformers = transformers,
             context = context,
