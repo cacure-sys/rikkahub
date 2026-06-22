@@ -901,14 +901,22 @@ class ChatService(
             return left + right
         }
 
-        suspend fun compressMessages(messages: List<UIMessage>): String {
+        suspend fun compressMessages(messages: List<UIMessage>, existingSummaryContext: String): String {
             val contentToCompress = messages.joinToString("\n\n") { it.summaryAsText(maxLength = 2000) }
+            val contextParts = buildString {
+                if (existingSummaryContext.isNotBlank()) {
+                    appendLine("The following is an existing summary that has already been recorded. Do NOT repeat information already covered below. Only output NEW events, status changes, and updates since the existing summary:")
+                    appendLine(existingSummaryContext)
+                    appendLine("---")
+                }
+                if (additionalPrompt.isNotBlank()) {
+                    appendLine("Additional instructions from user: $additionalPrompt")
+                }
+            }
             val prompt = settings.compressPrompt.applyPlaceholders(
                 "content" to contentToCompress,
                 "target_tokens" to targetTokens.toString(),
-                "additional_context" to if (additionalPrompt.isNotBlank()) {
-                    "Additional instructions from user: $additionalPrompt"
-                } else "",
+                "additional_context" to contextParts,
                 "locale" to Locale.getDefault().displayName
             )
 
@@ -922,9 +930,12 @@ class ChatService(
                 ?: throw IllegalStateException("Failed to generate compressed summary")
         }
 
+        // Pass old summaries as read-only context so new compression avoids duplication
+        val existingContext = preservedSummaries.joinToString("\n") { it.toText().orEmpty() }
+
         val compressedSummaries = coroutineScope {
             splitMessages(messagesToCompress)
-                .map { chunk -> async { compressMessages(chunk) } }
+                .map { chunk -> async { compressMessages(chunk, existingContext) } }
                 .awaitAll()
         }
 
