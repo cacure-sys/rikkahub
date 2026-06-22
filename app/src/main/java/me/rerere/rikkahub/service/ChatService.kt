@@ -864,18 +864,32 @@ class ChatService(
         val maxMessagesPerChunk = 256
         val allMessages = conversation.currentMessages
 
-        // Split messages into those to compress and those to keep
+        // Identify and preserve existing compressed summaries (never re-compress them)
+        val summaryMarker = "[COMPRESSED_SUMMARY]"
+        val preservedSummaries = mutableListOf<UIMessage>()
+        val regularMessages = mutableListOf<UIMessage>()
+
+        allMessages.forEach { msg ->
+            val text = msg.toText().orEmpty()
+            if (msg.role == me.rerere.ai.core.MessageRole.USER && text.startsWith(summaryMarker)) {
+                preservedSummaries.add(msg)
+            } else {
+                regularMessages.add(msg)
+            }
+        }
+
+        // Split regular (non-summary) messages into those to compress and those to keep
         val messagesToCompress: List<UIMessage>
         val messagesToKeep: List<UIMessage>
 
-        if (keepRecentMessages > 0 && allMessages.size > keepRecentMessages) {
-            messagesToCompress = allMessages.dropLast(keepRecentMessages)
-            messagesToKeep = allMessages.takeLast(keepRecentMessages)
+        if (keepRecentMessages > 0 && regularMessages.size > keepRecentMessages) {
+            messagesToCompress = regularMessages.dropLast(keepRecentMessages)
+            messagesToKeep = regularMessages.takeLast(keepRecentMessages)
         } else if (keepRecentMessages > 0) {
             // Not enough messages to compress while keeping recent ones
             throw IllegalStateException(context.getString(R.string.chat_page_compress_not_enough_messages))
         } else {
-            messagesToCompress = allMessages
+            messagesToCompress = regularMessages
             messagesToKeep = emptyList()
         }
 
@@ -914,10 +928,13 @@ class ChatService(
                 .awaitAll()
         }
 
-        // Create new conversation with compressed history as multiple user messages + kept messages
+        // Build new conversation: preserved old summaries + new compressed (tagged) + kept messages
         val newMessageNodes = buildList {
+            // Old summaries preserved verbatim — never re-compressed
+            preservedSummaries.forEach { add(it.toMessageNode()) }
+            // New summaries tagged with marker so next compression won't touch them
             compressedSummaries.forEach { summary ->
-                add(UIMessage.user(summary).toMessageNode())
+                add(UIMessage.user(summaryMarker + "\n" + summary).toMessageNode())
             }
             addAll(messagesToKeep.map { it.toMessageNode() })
         }
