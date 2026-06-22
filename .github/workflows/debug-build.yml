@@ -38,7 +38,7 @@ jobs:
 
       - name: Install web dependencies
         run: |
-          cd web/web-ui
+          cd web-ui
           pnpm install
 
       - name: Build debug APK
