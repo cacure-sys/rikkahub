@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import me.rerere.ai.ui.UIMessage
 import me.rerere.rikkahub.data.model.Conversation
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.uuid.Uuid
@@ -29,6 +30,9 @@ class ConversationSession(
 
     // 处理状态（如 OCR 识别中）
     val processingStatus = MutableStateFlow<String?>(null)
+
+    // 系统消息缓存：第一轮构建后存入，后续轮次直接复用，确保 messages[0] 绝对稳定
+    var cachedSystemMessage: UIMessage? = null
 
     // 生成任务（内聚在 session 中）
     private val _generationJob = MutableStateFlow<Job?>(null)

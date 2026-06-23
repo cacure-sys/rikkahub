@@ -85,11 +85,15 @@ class GenerationHandler(
         conversationModeInjectionIds: Set<Uuid> = emptySet(),
         conversationLorebookIds: Set<Uuid> = emptySet(),
         workspaceCwd: String? = null,
+        cachedSystemMessage: UIMessage? = null,
+        onSystemMessageBuilt: ((UIMessage) -> Unit)? = null,
     ): Flow<GenerationChunk> = flow {
         val provider = model.findProvider(settings.providers) ?: error("Provider not found")
         val providerImpl = providerManager.getProviderByType(provider)
 
         var messages: List<UIMessage> = messages
+        var systemCache = cachedSystemMessage
+        var systemCacheCallbackFired = cachedSystemMessage != null
 
         for (stepIndex in 0 until maxSteps) {
             Log.i(TAG, "streamText: start step #$stepIndex (${model.id})")
@@ -163,7 +167,13 @@ class GenerationHandler(
                     conversationModeInjectionIds = conversationModeInjectionIds,
                     conversationLorebookIds = conversationLorebookIds,
                     workspaceCwd = workspaceCwd,
+                    systemCache = { systemCache },
+                    onSetSystemCache = { systemCache = it },
                 )
+                if (!systemCacheCallbackFired && systemCache != null) {
+                    systemCacheCallbackFired = true
+                    onSystemMessageBuilt?.invoke(systemCache!!)
+                }
                 messages = messages.visualTransforms(
                     transformers = outputTransformers,
                     context = context,
@@ -362,54 +372,111 @@ class GenerationHandler(
         conversationModeInjectionIds: Set<Uuid> = emptySet(),
         conversationLorebookIds: Set<Uuid> = emptySet(),
         workspaceCwd: String? = null,
+        systemCache: () -> UIMessage? = { null },
+        onSetSystemCache: (UIMessage) -> Unit = {},
     ) {
-        val internalMessages = buildList {
-            val system = buildString {
-                val effectiveSystemPrompt =
-                    if (assistant.allowConversationSystemPrompt && !conversationSystemPrompt.isNullOrBlank()) {
-                        conversationSystemPrompt
-                    } else {
-                        assistant.systemPrompt
+        val cached = systemCache()
+
+        val internalMessages = if (cached != null) {
+            // 复用缓存系统消息，历史+新消息单独过管道（AT_DEPTH 注入仍然生效）
+            val rest = buildList {
+                addAll(messages.limitContext(assistant.contextMessageSize))
+                val dynamicContext = buildString {
+                    if (assistant.enableMemory) {
+                        append(buildMemoryPrompt(memories = memories))
                     }
-                if (effectiveSystemPrompt.isNotBlank()) {
-                    append(effectiveSystemPrompt)
+                    if (assistant.enableRecentChatsReference) {
+                        if (isNotBlank()) appendLine()
+                        append(buildRecentChatsPrompt(assistant, conversationRepo))
+                    }
                 }
+                if (dynamicContext.isNotBlank() && size > 0) {
+                    val lastIndex = size - 1
+                    val lastMsg = this[lastIndex]
+                    val updatedParts = lastMsg.parts.toMutableList()
+                    val textIndex = updatedParts.indexOfFirst { it is UIMessagePart.Text }
+                    if (textIndex >= 0) {
+                        val textPart = updatedParts[textIndex] as UIMessagePart.Text
+                        updatedParts[textIndex] = textPart.copy(text = dynamicContext + "\n\n" + textPart.text)
+                    } else {
+                        updatedParts.add(0, UIMessagePart.Text(dynamicContext))
+                    }
+                    this[lastIndex] = lastMsg.copy(parts = updatedParts)
+                }
+            }.transforms(
+                transformers = transformers,
+                context = context,
+                model = model,
+                assistant = assistant,
+                settings = settings,
+                conversationModeInjectionIds = conversationModeInjectionIds,
+                conversationLorebookIds = conversationLorebookIds,
+                processingStatus = processingStatus,
+                workspaceCwd = workspaceCwd,
+            )
+            val newSysIndex = rest.indexOfFirst { it.role == MessageRole.SYSTEM }
+            if (newSysIndex >= 0) {
+                listOf(cached) + rest.subList(newSysIndex + 1, rest.size)
+            } else {
+                listOf(cached) + rest
+            }
+        } else {
+            // 首次构建：系统消息 + 历史 + 动态上下文全量过管道
+            val result = buildList {
+                val system = buildString {
+                    val effectiveSystemPrompt =
+                        if (assistant.allowConversationSystemPrompt && !conversationSystemPrompt.isNullOrBlank()) {
+                            conversationSystemPrompt
+                        } else {
+                            assistant.systemPrompt
+                        }
+                    if (effectiveSystemPrompt.isNotBlank()) {
+                        append(effectiveSystemPrompt)
+                    }
+                    tools.forEach { tool ->
+                        appendLine()
+                        append(tool.systemPrompt(model, messages))
+                    }
+                }
+                if (system.isNotBlank()) add(UIMessage.system(prompt = system))
+                addAll(messages.limitContext(assistant.contextMessageSize))
 
-                // 工具prompt
-                tools.forEach { tool ->
-                    appendLine()
-                    append(tool.systemPrompt(model, messages))
+                val dynamicContext = buildString {
+                    if (assistant.enableMemory) {
+                        append(buildMemoryPrompt(memories = memories))
+                    }
+                    if (assistant.enableRecentChatsReference) {
+                        if (isNotBlank()) appendLine()
+                        append(buildRecentChatsPrompt(assistant, conversationRepo))
+                    }
                 }
-            }
-            if (system.isNotBlank()) add(UIMessage.system(prompt = system))
-            addAll(messages.limitContext(assistant.contextMessageSize))
-
-            // 动态上下文（记忆/最近对话）作为独立消息插在对话末尾附近，不污染系统提示词前缀
-            val dynamicContext = buildString {
-                if (assistant.enableMemory) {
-                    append(buildMemoryPrompt(memories = memories))
+                if (dynamicContext.isNotBlank() && size > 1) {
+                    val lastIndex = size - 1
+                    val lastMsg = this[lastIndex]
+                    val updatedParts = lastMsg.parts.toMutableList()
+                    val textIndex = updatedParts.indexOfFirst { it is UIMessagePart.Text }
+                    if (textIndex >= 0) {
+                        val textPart = updatedParts[textIndex] as UIMessagePart.Text
+                        updatedParts[textIndex] = textPart.copy(text = dynamicContext + "\n\n" + textPart.text)
+                    } else {
+                        updatedParts.add(0, UIMessagePart.Text(dynamicContext))
+                    }
+                    this[lastIndex] = lastMsg.copy(parts = updatedParts)
                 }
-                if (assistant.enableRecentChatsReference) {
-                    if (isNotBlank()) appendLine()
-                    append(buildRecentChatsPrompt(assistant, conversationRepo))
-                }
-            }
-            if (dynamicContext.isNotBlank()) {
-                // 插在最后一条消息之前
-                val insertIndex = (size - 1).coerceAtLeast(1)
-                add(insertIndex, UIMessage.system(prompt = dynamicContext))
-            }
-        }.transforms(
-            transformers = transformers,
-            context = context,
-            model = model,
-            assistant = assistant,
-            settings = settings,
-            conversationModeInjectionIds = conversationModeInjectionIds,
-            conversationLorebookIds = conversationLorebookIds,
-            processingStatus = processingStatus,
-            workspaceCwd = workspaceCwd,
-        )
+            }.transforms(
+                transformers = transformers,
+                context = context,
+                model = model,
+                assistant = assistant,
+                settings = settings,
+                conversationModeInjectionIds = conversationModeInjectionIds,
+                conversationLorebookIds = conversationLorebookIds,
+                processingStatus = processingStatus,
+                workspaceCwd = workspaceCwd,
+            )
+            result.firstOrNull { it.role == MessageRole.SYSTEM }?.let { onSetSystemCache(it) }
+            result
+        }
 
         var messages: List<UIMessage> = messages
         val params = TextGenerationParams(

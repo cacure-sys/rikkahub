@@ -598,6 +598,10 @@ class ChatService(
                         )
                     }
                 },
+                cachedSystemMessage = session.cachedSystemMessage,
+                onSystemMessageBuilt = { msg ->
+                    session.cachedSystemMessage = msg
+                },
             ).onCompletion {
                 // 取消 Live Update 通知
                 cancelLiveUpdateNotification(conversationId)
