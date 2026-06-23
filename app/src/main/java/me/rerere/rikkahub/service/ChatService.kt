@@ -934,8 +934,10 @@ class ChatService(
                 ?: throw IllegalStateException("Failed to generate compressed summary")
         }
 
-        // 旧摘要拼接为参考上下文
-        val existingContext = preservedSummaries.joinToString("\n") { it.toText().orEmpty() }
+        // 旧摘要拼接为参考上下文（剥离标记前缀，避免 AI 学舌）
+        val existingContext = preservedSummaries.joinToString("\n") {
+            it.toText().orEmpty().removePrefix(summaryMarker).trim()
+        }
 
         val compressedSummaries = coroutineScope {
             splitMessages(messagesToCompress)
@@ -944,9 +946,14 @@ class ChatService(
         }
 
         // 构建新对话：新摘要替换旧摘要（合并模式已包含旧信息）+ 最近消息
+        // 若无新摘要产出（边界情况），保留旧摘要以防压缩历史丢失
         val newMessageNodes = buildList {
-            compressedSummaries.forEach { summary ->
-                add(UIMessage.user(summaryMarker + "\n" + summary).toMessageNode())
+            if (compressedSummaries.isNotEmpty()) {
+                compressedSummaries.forEach { summary ->
+                    add(UIMessage.user(summaryMarker + "\n" + summary).toMessageNode())
+                }
+            } else {
+                preservedSummaries.forEach { add(it.toMessageNode()) }
             }
             addAll(messagesToKeep.map { it.toMessageNode() })
         }
