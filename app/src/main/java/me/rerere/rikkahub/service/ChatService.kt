@@ -868,18 +868,31 @@ class ChatService(
         val maxMessagesPerChunk = 256
         val allMessages = conversation.currentMessages
 
-        // Split messages into those to compress and those to keep
+        // 识别并保留已有压缩摘要（标记 [COMPRESSED_SUMMARY]，永不重压）
+        val summaryMarker = "[COMPRESSED_SUMMARY]"
+        val preservedSummaries = mutableListOf<UIMessage>()
+        val regularMessages = mutableListOf<UIMessage>()
+
+        allMessages.forEach { msg ->
+            val text = msg.toText().orEmpty()
+            if (msg.role == me.rerere.ai.core.MessageRole.USER && text.startsWith(summaryMarker)) {
+                preservedSummaries.add(msg)
+            } else {
+                regularMessages.add(msg)
+            }
+        }
+
+        // 只压缩非摘要的常规消息，保留最近 N 条不压
         val messagesToCompress: List<UIMessage>
         val messagesToKeep: List<UIMessage>
 
-        if (keepRecentMessages > 0 && allMessages.size > keepRecentMessages) {
-            messagesToCompress = allMessages.dropLast(keepRecentMessages)
-            messagesToKeep = allMessages.takeLast(keepRecentMessages)
+        if (keepRecentMessages > 0 && regularMessages.size > keepRecentMessages) {
+            messagesToCompress = regularMessages.dropLast(keepRecentMessages)
+            messagesToKeep = regularMessages.takeLast(keepRecentMessages)
         } else if (keepRecentMessages > 0) {
-            // Not enough messages to compress while keeping recent ones
             throw IllegalStateException(context.getString(R.string.chat_page_compress_not_enough_messages))
         } else {
-            messagesToCompress = allMessages
+            messagesToCompress = regularMessages
             messagesToKeep = emptyList()
         }
 
@@ -891,14 +904,23 @@ class ChatService(
             return left + right
         }
 
-        suspend fun compressMessages(messages: List<UIMessage>): String {
+        suspend fun compressMessages(messages: List<UIMessage>, existingSummaryContext: String): String {
             val contentToCompress = messages.joinToString("\n\n") { it.summaryAsText(maxLength = 2000) }
+            val contextParts = buildString {
+                // 旧摘要作为只读参考：告诉压缩 AI 不要重复已有内容，只输出增量
+                if (existingSummaryContext.isNotBlank()) {
+                    appendLine("The following is an existing summary that has already been recorded. Do NOT repeat information already covered below. Only output NEW events, status changes, and updates since the existing summary:")
+                    appendLine(existingSummaryContext)
+                    appendLine("---")
+                }
+                if (additionalPrompt.isNotBlank()) {
+                    appendLine("Additional instructions from user: $additionalPrompt")
+                }
+            }
             val prompt = settings.compressPrompt.applyPlaceholders(
                 "content" to contentToCompress,
                 "target_tokens" to targetTokens.toString(),
-                "additional_context" to if (additionalPrompt.isNotBlank()) {
-                    "Additional instructions from user: $additionalPrompt"
-                } else "",
+                "additional_context" to contextParts,
                 "locale" to Locale.getDefault().displayName
             )
 
@@ -912,16 +934,20 @@ class ChatService(
                 ?: throw IllegalStateException("Failed to generate compressed summary")
         }
 
+        // 旧摘要拼接为参考上下文
+        val existingContext = preservedSummaries.joinToString("\n") { it.toText().orEmpty() }
+
         val compressedSummaries = coroutineScope {
             splitMessages(messagesToCompress)
-                .map { chunk -> async { compressMessages(chunk) } }
+                .map { chunk -> async { compressMessages(chunk, existingContext) } }
                 .awaitAll()
         }
 
-        // Create new conversation with compressed history as multiple user messages + kept messages
+        // 构建新对话：旧摘要原样保留 + 新摘要标记 + 最近消息
         val newMessageNodes = buildList {
+            preservedSummaries.forEach { add(it.toMessageNode()) }
             compressedSummaries.forEach { summary ->
-                add(UIMessage.user(summary).toMessageNode())
+                add(UIMessage.user(summaryMarker + "\n" + summary).toMessageNode())
             }
             addAll(messagesToKeep.map { it.toMessageNode() })
         }
