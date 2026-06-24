@@ -909,7 +909,7 @@ class ChatService(
             val contextParts = buildString {
                 // 旧摘要作为只读参考：告诉压缩 AI 不要重复已有内容，只输出增量
                 if (existingSummaryContext.isNotBlank()) {
-                    appendLine("Below is an existing summary from earlier in the conversation. Use it as context — correct any outdated information, keep what is still accurate, and merge in the new events below to produce a single up-to-date summary. Do NOT describe the summary itself or reference 'the existing summary' in your output; just produce the updated result.")
+                    appendLine("The following is an existing summary that has already been recorded. Do NOT repeat information already covered below. Only output NEW events, status changes, and updates since the existing summary:")
                     appendLine(existingSummaryContext)
                     appendLine("---")
                 }
@@ -945,15 +945,11 @@ class ChatService(
                 .awaitAll()
         }
 
-        // 构建新对话：新摘要替换旧摘要（合并模式已包含旧信息）+ 最近消息
-        // 若无新摘要产出（边界情况），保留旧摘要以防压缩历史丢失
+        // 构建新对话：旧摘要原样保留 + 新摘要追加（增量模式，时序不断）+ 最近消息
         val newMessageNodes = buildList {
-            if (compressedSummaries.isNotEmpty()) {
-                compressedSummaries.forEach { summary ->
-                    add(UIMessage.user(summaryMarker + "\n" + summary).toMessageNode())
-                }
-            } else {
-                preservedSummaries.forEach { add(it.toMessageNode()) }
+            preservedSummaries.forEach { add(it.toMessageNode()) }
+            compressedSummaries.forEach { summary ->
+                add(UIMessage.user(summaryMarker + "\n" + summary).toMessageNode())
             }
             addAll(messagesToKeep.map { it.toMessageNode() })
         }
