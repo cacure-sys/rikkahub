@@ -909,7 +909,7 @@ class ChatService(
             val contextParts = buildString {
                 // 旧摘要作为只读参考：告诉压缩 AI 不要重复已有内容，只输出增量
                 if (existingSummaryContext.isNotBlank()) {
-                    appendLine("The following is an existing summary that has already been recorded. Do NOT repeat information already covered below. Only output NEW events, status changes, and updates since the existing summary:")
+                    appendLine("The following is an existing summary that has already been recorded. Do NOT repeat information already covered below. Only output NEW events, status changes, and updates since the existing summary. If new events contradict or supersede old information, explicitly note the update — the AI will read summaries in chronological order and will trust the newer entry.")
                     appendLine(existingSummaryContext)
                     appendLine("---")
                 }
