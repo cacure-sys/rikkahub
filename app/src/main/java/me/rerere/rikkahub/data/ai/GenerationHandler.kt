@@ -383,10 +383,7 @@ class GenerationHandler(
                     if (assistant.enableMemory) {
                         append(buildMemoryPrompt(memories = memories))
                     }
-                    if (assistant.enableRecentChatsReference) {
-                        if (isNotBlank()) appendLine()
-                        append(buildRecentChatsPrompt(assistant, conversationRepo))
-                    }
+                    // enableRecentChatsReference removed in upstream 2.4.0
                 }
                 if (dynamicContext.isNotBlank() && size > 0) {
                     val lastIndex = size - 1
@@ -443,10 +440,7 @@ class GenerationHandler(
                     if (assistant.enableMemory) {
                         append(buildMemoryPrompt(memories = memories))
                     }
-                    if (assistant.enableRecentChatsReference) {
-                        if (isNotBlank()) appendLine()
-                        append(buildRecentChatsPrompt(assistant, conversationRepo))
-                    }
+                    // enableRecentChatsReference removed in upstream 2.4.0
                 }
                 if (dynamicContext.isNotBlank() && size > 1) {
                     val lastIndex = size - 1
