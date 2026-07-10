@@ -487,7 +487,7 @@ private fun MarkdownNode(
         }
 
         MarkdownElementTypes.STRONG -> {
-            ProvideTextStyle(TextStyle(fontWeight = FontWeight.SemiBold)) {
+            ProvideTextStyle(TextStyle(fontWeight = FontWeight.Bold)) {
                 node.children.fastForEach { child ->
                     MarkdownNode(
                         node = child, content = content, modifier = modifier, onClickCitation = onClickCitation
@@ -540,7 +540,8 @@ private fun MarkdownNode(
             val enableLatexRendering = LocalSettings.current.displaySetting.enableLatexRendering
             if (enableLatexRendering) {
                 MathInline(
-                    formula, modifier = modifier.padding(horizontal = 1.dp)
+                    formula, modifier = modifier.padding(horizontal = 1.dp),
+                    fontSize = LocalTextStyle.current.fontSize
                 )
             } else {
                 Text(
@@ -558,7 +559,8 @@ private fun MarkdownNode(
                 MathBlock(
                     formula, modifier = modifier
                         .fillMaxWidth()
-                        .padding(vertical = 8.dp)
+                        .padding(vertical = 8.dp),
+                    fontSize = LocalTextStyle.current.fontSize
                 )
             } else {
                 Text(
@@ -1039,7 +1041,7 @@ private fun AnnotatedString.Builder.appendMarkdownNodeContent(
         }
 
         node.type == MarkdownElementTypes.STRONG -> {
-            withStyle(SpanStyle(fontWeight = FontWeight.SemiBold)) {
+            withStyle(SpanStyle(fontWeight = FontWeight.Bold)) {
                 node.children.trim(MarkdownTokenTypes.EMPH, 2).fastForEach {
                     appendMarkdownNodeContent(
                         node = it,
