@@ -920,8 +920,14 @@ class ChatService(
         }
 
         // 旧摘要拼接为参考上下文（剥离标记前缀，避免 AI 学舌）
+        // 只截取事件时间轴(三)、梗与暗号(四)、续写起点(九)三章，削减 token 耗量
         val existingContext = preservedSummaries.joinToString("\n") {
-            it.toText().orEmpty().removePrefix(summaryMarker).trim()
+            val full = it.toText().orEmpty().removePrefix(summaryMarker).trim()
+            val keyChapters = Regex(
+                "(?:#{1,6}\\s*)?第[三四九]章\\s*·\\s*.+?(?=(?:#{1,6}\\s*)?第[一二三四五六七八九]章\\s*·|\$)",
+                setOf(RegexOption.DOT_MATCHES_ALL)
+            ).findAll(full).joinToString("\n\n") { m -> m.value.trim() }
+            keyChapters.ifBlank { full }
         }
 
         val compressedSummaries = coroutineScope {
