@@ -636,6 +636,28 @@ class ChatService(
             launchWithConversationReference(conversationId) {
                 generateSuggestion(conversationId, finalConversation)
             }
+
+            // 自动压缩：非摘要消息超过阈值且开关开启时，静默触发
+            if (settings.autoCompressEnabled) {
+                val autoCompressThreshold = 100
+                val summaryMarker = "[COMPRESSED_SUMMARY]"
+                val regularCount = finalConversation.currentMessages.count { msg ->
+                    val text = msg.toText().orEmpty()
+                    !(msg.role == MessageRole.USER && text.startsWith(summaryMarker))
+                }
+                if (regularCount > autoCompressThreshold) {
+                    launchWithConversationReference(conversationId) {
+                        Logging.log(TAG, "Auto-compress triggered: $regularCount messages")
+                        compressConversation(
+                            conversationId = conversationId,
+                            conversation = finalConversation,
+                            additionalPrompt = "",
+                            targetTokens = 2000,
+                            keepRecentMessages = 32
+                        )
+                    }
+                }
+            }
         }
     }
 
