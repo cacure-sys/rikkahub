@@ -889,8 +889,10 @@ class ChatService(
             return left + right
         }
 
-        suspend fun compressMessages(messages: List<UIMessage>, existingSummaryContext: String): String {
-            val contentToCompress = messages.joinToString("\n\n") { it.summaryAsText(maxLength = 2000) }
+        suspend fun compressMessages(messages: List<UIMessage>, existingSummaryContext: String, roundOffset: Int): String {
+            val contentToCompress = messages.mapIndexed { index, msg ->
+                "[轮次 ${roundOffset + index + 1}] ${msg.summaryAsText(maxLength = 2000)}"
+            }.joinToString("\n\n")
             val contextParts = buildString {
                 // 旧摘要作为只读参考：告诉压缩 AI 不要重复已有内容，只输出增量
                 if (existingSummaryContext.isNotBlank()) {
@@ -920,19 +922,24 @@ class ChatService(
         }
 
         // 旧摘要拼接为参考上下文（剥离标记前缀，避免 AI 学舌）
-        // 只截取事件时间轴(三)、梗与暗号(四)、续写起点(九)三章，削减 token 耗量
+        // 只截取事件因果链(一)、续写锚点(四)两章，削减 token 耗量
         val existingContext = preservedSummaries.joinToString("\n") {
             val full = it.toText().orEmpty().removePrefix(summaryMarker).trim()
             val keyChapters = Regex(
-                "(?:#{1,6}\\s*)?第[三四九]章\\s*·\\s*.+?(?=(?:#{1,6}\\s*)?第[一二三四五六七八九]章\\s*·|\$)",
+                "(?:#{1,6}\\s*)?第[一四]章\\s*·\\s*.+?(?=(?:#{1,6}\\s*)?第[一二三四]章\\s*·|\$)",
                 setOf(RegexOption.DOT_MATCHES_ALL)
             ).findAll(full).joinToString("\n\n") { m -> m.value.trim() }
             keyChapters.ifBlank { full }
         }
 
+        // 从旧摘要末章解析截止轮次，作为本次压缩的起始轮次偏移量
+        val lastCoveredRound = preservedSummaries.lastOrNull()?.toText()?.let { text ->
+            Regex("""覆盖第\s*\d+\s*[-–—]\s*(\d+)\s*轮""").find(text)?.groupValues?.get(1)?.toIntOrNull()
+        } ?: 0
+
         val compressedSummaries = coroutineScope {
             splitMessages(messagesToCompress)
-                .map { chunk -> async { compressMessages(chunk, existingContext) } }
+                .map { chunk -> async { compressMessages(chunk, existingContext, lastCoveredRound) } }
                 .awaitAll()
         }
 
