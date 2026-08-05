@@ -13,10 +13,12 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -28,8 +30,10 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Job
 import me.rerere.rikkahub.R
+import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.ui.components.ui.OutlinedNumberInput
 import me.rerere.rikkahub.ui.components.ui.RabbitLoadingIndicator
+import org.koin.compose.koinInject
 
 @Composable
 fun CompressContextDialog(
@@ -110,6 +114,27 @@ fun CompressContextDialog(
                         label = stringResource(R.string.chat_page_compress_keep_recent),
                         modifier = Modifier.fillMaxWidth(),
                     )
+
+                    // Auto-compress toggle
+                    val settingsStore: SettingsStore = koinInject()
+                    val autoCompressEnabled by settingsStore.settingsFlow.collectAsState(initial = null)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "自动压缩",
+                            style = MaterialTheme.typography.labelMedium,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Switch(
+                            checked = autoCompressEnabled?.autoCompressEnabled == true,
+                            onCheckedChange = { enabled ->
+                                settingsStore.update { it.copy(autoCompressEnabled = enabled) }
+                            }
+                        )
+                    }
 
                     // Additional context input
                     OutlinedTextField(

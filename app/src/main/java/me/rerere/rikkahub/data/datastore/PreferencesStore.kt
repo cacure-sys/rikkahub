@@ -150,6 +150,9 @@ class SettingsStore(
 
         // 赞助提醒
         val SPONSOR_ALERT_DISMISSED_AT = intPreferencesKey("sponsor_alert_dismissed_at")
+
+        // 自动压缩
+        val AUTO_COMPRESS_ENABLED = booleanPreferencesKey("auto_compress_enabled")
     }
 
     private val dataStore = context.settingsStore
@@ -243,6 +246,7 @@ class SettingsStore(
                 } ?: BackupReminderConfig(),
                 launchCount = preferences[LAUNCH_COUNT] ?: 0,
                 sponsorAlertDismissedAt = preferences[SPONSOR_ALERT_DISMISSED_AT] ?: 0,
+                autoCompressEnabled = preferences[AUTO_COMPRESS_ENABLED] == true,
             )
         }
         .map {
@@ -411,6 +415,7 @@ class SettingsStore(
             preferences[BACKUP_REMINDER_CONFIG] = JsonInstant.encodeToString(settings.backupReminderConfig)
             preferences[LAUNCH_COUNT] = settings.launchCount
             preferences[SPONSOR_ALERT_DISMISSED_AT] = settings.sponsorAlertDismissedAt
+            preferences[AUTO_COMPRESS_ENABLED] = settings.autoCompressEnabled
         }
     }
 
@@ -541,6 +546,7 @@ data class Settings(
     val backupReminderConfig: BackupReminderConfig = BackupReminderConfig(),
     val launchCount: Int = 0,
     val sponsorAlertDismissedAt: Int = 0,
+    val autoCompressEnabled: Boolean = false,
 ) {
     companion object {
         // 构造一个用于初始化的settings, 但它不能用于保存，防止使用初始值存储

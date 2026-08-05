@@ -43,10 +43,21 @@ jobs:
           cd web-ui
           pnpm install
 
+      - name: Generate debug keystore for release
+        run: |
+          keytool -genkey -v -keystore $HOME/debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+          echo "storeFile=$HOME/debug.keystore" >> local.properties
+          echo "storePassword=android" >> local.properties
+          echo "keyAlias=androiddebugkey" >> local.properties
+          echo "keyPassword=android" >> local.properties
+
       - name: Build debug APK
         run: |
           chmod +x gradlew
           ./gradlew assembleDebug
+
+      - name: Build release APK
+        run: ./gradlew assembleRelease
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
@@ -54,3 +65,10 @@ jobs:
         with:
           name: rikkahub-debug-apk
           path: app/build/outputs/apk/debug/*.apk
+
+      - name: Upload release APK
+        uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: rikkahub-release-apk
+          path: app/build/outputs/apk/release/*.apk
