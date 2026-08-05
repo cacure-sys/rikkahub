@@ -378,7 +378,7 @@ class GenerationHandler(
         val internalMessages = if (cached != null) {
             // 复用缓存系统消息，历史+新消息单独过管道（AT_DEPTH 注入仍然生效）
             val rest = buildList {
-                addAll(messages.limitContext(assistant.contextMessageSize))
+                addAll(messages.limitContext(assistant.contextMessageLimit))
                 val dynamicContext = buildString {
                     if (assistant.enableMemory) {
                         append(buildMemoryPrompt(memories = memories))
@@ -416,8 +416,8 @@ class GenerationHandler(
                 listOf(cached) + rest
             }
         } else {
-            // 首次构建：系统消息 + 历史 + 动态上下文全量过管道
-            val result = buildList {
+            // 首次构建：系统消息 + 历史全量过管道（阶梯截断由 limitContext 处理缓存稳定性）
+            buildList {
                 val system = buildString {
                     val effectiveSystemPrompt =
                         if (assistant.allowConversationSystemPrompt && !conversationSystemPrompt.isNullOrBlank()) {
@@ -434,27 +434,7 @@ class GenerationHandler(
                     }
                 }
                 if (system.isNotBlank()) add(UIMessage.system(prompt = system))
-                addAll(messages.limitContext(assistant.contextMessageSize))
-
-                val dynamicContext = buildString {
-                    if (assistant.enableMemory) {
-                        append(buildMemoryPrompt(memories = memories))
-                    }
-                    // enableRecentChatsReference removed in upstream 2.4.0
-                }
-                if (dynamicContext.isNotBlank() && size > 1) {
-                    val lastIndex = size - 1
-                    val lastMsg = this[lastIndex]
-                    val updatedParts = lastMsg.parts.toMutableList()
-                    val textIndex = updatedParts.indexOfFirst { it is UIMessagePart.Text }
-                    if (textIndex >= 0) {
-                        val textPart = updatedParts[textIndex] as UIMessagePart.Text
-                        updatedParts[textIndex] = textPart.copy(text = dynamicContext + "\n\n" + textPart.text)
-                    } else {
-                        updatedParts.add(0, UIMessagePart.Text(dynamicContext))
-                    }
-                    this[lastIndex] = lastMsg.copy(parts = updatedParts)
-                }
+                addAll(messages.limitContext(assistant.contextMessageLimit))
             }.transforms(
                 transformers = transformers,
                 context = context,
@@ -466,8 +446,6 @@ class GenerationHandler(
                 processingStatus = processingStatus,
                 workspaceCwd = workspaceCwd,
             )
-            result.firstOrNull { it.role == MessageRole.SYSTEM }?.let { onSetSystemCache(it) }
-            result
         }
 
         var messages: List<UIMessage> = messages
