@@ -637,8 +637,8 @@ class ChatService(
                 generateSuggestion(conversationId, finalConversation)
             }
 
-            // 自动压缩：非摘要消息超过阈值且开关开启时，静默触发
-            if (settings.autoCompressEnabled) {
+            // 自动压缩：助手级开关开启且非摘要消息超过阈值时，静默触发
+            if (assistant.autoCompressEnabled) {
                 val autoCompressThreshold = 100
                 val summaryMarker = "[COMPRESSED_SUMMARY]"
                 val regularCount = finalConversation.currentMessages.count { msg ->
