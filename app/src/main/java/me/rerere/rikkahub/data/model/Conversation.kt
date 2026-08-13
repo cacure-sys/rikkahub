@@ -31,6 +31,8 @@ data class Conversation(
     val workspaceCwd: String? = null,
     // 所属文件夹（助手内分组），null 表示未归入任何文件夹
     val folderId: Uuid? = null,
+    // 自动压缩生成的摘要缓存（只读拼装用，原文历史保留）
+    val summaryCache: String? = null,
     @Transient
     val newConversation: Boolean = false
 ) {

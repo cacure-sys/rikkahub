@@ -2,6 +2,12 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## 编译流程（重要）
+
+- **不要在本地编译验证。** 本地 gradle wrapper 会尝试下载 `gradle-9.5.0-bin.zip`，但被本机 SSL 证书拦截（`PKIX path building failed`，`services.gradle.org` 证书验证失败），下载必失败。
+- 本项目通过 **推到 GitHub 用 Actions 编译** 来验证构建。改动写完后直接提交/推送，由 CI 跑编译与打包（release/debug APK）。
+- 本地只做静态检查（grep/读代码），不要运行 `./gradlew`。
+
 ## Project Overview
 
 RikkaHub is a native Android LLM chat client that supports switching between different AI providers for conversations.

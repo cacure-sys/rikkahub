@@ -84,6 +84,7 @@ class GenerationHandler(
         conversationLorebookIds: Set<Uuid> = emptySet(),
         workspaceCwd: String? = null,
         cachedSystemMessage: UIMessage? = null,
+        conversationSummary: String? = null,
         onSystemMessageBuilt: ((UIMessage) -> Unit)? = null,
     ): Flow<GenerationChunk> = flow {
         val provider = model.findProvider(settings.providers) ?: error("Provider not found")
@@ -167,6 +168,7 @@ class GenerationHandler(
                     workspaceCwd = workspaceCwd,
                     systemCache = { systemCache },
                     onSetSystemCache = { systemCache = it },
+                    conversationSummary = conversationSummary,
                 )
                 if (!systemCacheCallbackFired && systemCache != null) {
                     systemCacheCallbackFired = true
@@ -372,6 +374,7 @@ class GenerationHandler(
         workspaceCwd: String? = null,
         systemCache: () -> UIMessage? = { null },
         onSetSystemCache: (UIMessage) -> Unit = {},
+        conversationSummary: String? = null,
     ) {
         val cached = systemCache()
 
@@ -410,10 +413,13 @@ class GenerationHandler(
                 workspaceCwd = workspaceCwd,
             )
             val newSysIndex = rest.indexOfFirst { it.role == MessageRole.SYSTEM }
+            val summaryMessage = conversationSummary?.takeIf { it.isNotBlank() }
+                ?.let { UIMessage.system("[Previous conversation summary]\n$it") }
+            val head = listOfNotNull(cached, summaryMessage)
             if (newSysIndex >= 0) {
-                listOf(cached) + rest.subList(newSysIndex + 1, rest.size)
+                head + rest.subList(newSysIndex + 1, rest.size)
             } else {
-                listOf(cached) + rest
+                head + rest
             }
         } else {
             // 首次构建：系统消息 + 历史全量过管道（阶梯截断由 limitContext 处理缓存稳定性）
@@ -434,6 +440,9 @@ class GenerationHandler(
                     }
                 }
                 if (system.isNotBlank()) add(UIMessage.system(prompt = system))
+                conversationSummary?.takeIf { it.isNotBlank() }?.let {
+                    add(UIMessage.system("[Previous conversation summary]\n$it"))
+                }
                 addAll(messages.limitContext(assistant.contextMessageLimit))
             }.transforms(
                 transformers = transformers,

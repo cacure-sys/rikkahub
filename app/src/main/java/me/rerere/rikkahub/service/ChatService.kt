@@ -498,7 +498,30 @@ class ChatService(
 
             // check invalid messages
             checkInvalidMessages(conversationId)
-            val conversation = getConversationFlow(conversationId).value
+            var conversation = getConversationFlow(conversationId).value
+
+            // 自动压缩：生成前同步触发（与生成同一 job，可取消、无竞态）
+            if (assistant.autoCompressEnabled) {
+                val summaryMarker = "[COMPRESSED_SUMMARY]"
+                val regularCount = conversation.currentMessages.count { msg ->
+                    val text = msg.toText().orEmpty()
+                    !(msg.role == MessageRole.USER && text.startsWith(summaryMarker))
+                }
+                if (regularCount > assistant.autoCompressThreshold) {
+                    Logging.log(TAG, "Auto-compress triggered before generation: $regularCount messages")
+                    compressConversation(
+                        conversationId = conversationId,
+                        conversation = conversation,
+                        additionalPrompt = "",
+                        targetTokens = 2000,
+                        keepRecentMessages = 32
+                    ).onFailure {
+                        it.printStackTrace()
+                    }.onSuccess {
+                        conversation = getConversationFlow(conversationId).value
+                    }
+                }
+            }
 
             // start generating
             val session = getOrCreateSession(conversationId)
@@ -578,6 +601,7 @@ class ChatService(
                     }
                 },
                 cachedSystemMessage = session.cachedSystemMessage,
+                conversationSummary = conversation.summaryCache,
                 onSystemMessageBuilt = { msg ->
                     session.cachedSystemMessage = msg
                 },
@@ -634,28 +658,6 @@ class ChatService(
             }
             launchWithConversationReference(conversationId) {
                 generateSuggestion(conversationId, finalConversation)
-            }
-
-            // 自动压缩：助手级开关开启且非摘要消息超过阈值时，静默触发
-            if (assistant.autoCompressEnabled) {
-                val autoCompressThreshold = 100
-                val summaryMarker = "[COMPRESSED_SUMMARY]"
-                val regularCount = finalConversation.currentMessages.count { msg ->
-                    val text = msg.toText().orEmpty()
-                    !(msg.role == MessageRole.USER && text.startsWith(summaryMarker))
-                }
-                if (regularCount > autoCompressThreshold) {
-                    launchWithConversationReference(conversationId) {
-                        Logging.log(TAG, "Auto-compress triggered: $regularCount messages")
-                        compressConversation(
-                            conversationId = conversationId,
-                            conversation = finalConversation,
-                            additionalPrompt = "",
-                            targetTokens = 2000,
-                            keepRecentMessages = 32
-                        )
-                    }
-                }
             }
         }
     }
@@ -874,32 +876,17 @@ class ChatService(
         val maxMessagesPerChunk = 256
         val allMessages = conversation.currentMessages
 
-        // 识别并保留已有压缩摘要（标记 [COMPRESSED_SUMMARY]，永不重压）
-        val summaryMarker = "[COMPRESSED_SUMMARY]"
-        val preservedSummaries = mutableListOf<UIMessage>()
-        val regularMessages = mutableListOf<UIMessage>()
+        // 旧摘要作为增量参考（只读拼装用）；原文历史完整保留，仅更新 summaryCache
+        val existingSummary = conversation.summaryCache.orEmpty()
 
-        allMessages.forEach { msg ->
-            val text = msg.toText().orEmpty()
-            if (msg.role == me.rerere.ai.core.MessageRole.USER && text.startsWith(summaryMarker)) {
-                preservedSummaries.add(msg)
-            } else {
-                regularMessages.add(msg)
-            }
-        }
-
-        // 只压缩非摘要的常规消息，保留最近 N 条不压
+        // 只压缩除最近 N 条以外的消息
         val messagesToCompress: List<UIMessage>
-        val messagesToKeep: List<UIMessage>
-
-        if (keepRecentMessages > 0 && regularMessages.size > keepRecentMessages) {
-            messagesToCompress = regularMessages.dropLast(keepRecentMessages)
-            messagesToKeep = regularMessages.takeLast(keepRecentMessages)
+        if (keepRecentMessages > 0 && allMessages.size > keepRecentMessages) {
+            messagesToCompress = allMessages.dropLast(keepRecentMessages)
         } else if (keepRecentMessages > 0) {
             throw IllegalStateException(context.getString(R.string.chat_page_compress_not_enough_messages))
         } else {
-            messagesToCompress = regularMessages
-            messagesToKeep = emptyList()
+            messagesToCompress = allMessages
         }
 
         fun splitMessages(messages: List<UIMessage>): List<List<UIMessage>> {
@@ -942,21 +929,12 @@ class ChatService(
                 ?: throw IllegalStateException("Failed to generate compressed summary")
         }
 
-        // 旧摘要拼接为参考上下文（剥离标记前缀，避免 AI 学舌）
-        // 只截取事件因果链(一)、续写锚点(四)两章，削减 token 耗量
-        val existingContext = preservedSummaries.joinToString("\n") {
-            val full = it.toText().orEmpty().removePrefix(summaryMarker).trim()
-            val keyChapters = Regex(
-                "(?:#{1,6}\\s*)?第[一四]章\\s*·\\s*.+?(?=(?:#{1,6}\\s*)?第[一二三四]章\\s*·|\$)",
-                setOf(RegexOption.DOT_MATCHES_ALL)
-            ).findAll(full).joinToString("\n\n") { m -> m.value.trim() }
-            keyChapters.ifBlank { full }
-        }
+        // 摘要随轮次累积膨胀，参考上下文只保留末尾一段，避免压缩请求自身超长
+        val existingContext = existingSummary.takeLast(12000)
 
-        // 从旧摘要末章解析截止轮次，作为本次压缩的起始轮次偏移量
-        val lastCoveredRound = preservedSummaries.lastOrNull()?.toText()?.let { text ->
-            Regex("""覆盖第\s*\d+\s*[-–—]\s*(\d+)\s*轮""").find(text)?.groupValues?.get(1)?.toIntOrNull()
-        } ?: 0
+        // 从旧摘要解析截止轮次，作为本次压缩的起始轮次偏移量
+        val lastCoveredRound = Regex("""覆盖第\s*\d+\s*[-–—]\s*(\d+)\s*轮""")
+            .find(existingSummary)?.groupValues?.get(1)?.toIntOrNull() ?: 0
 
         val compressedSummaries = coroutineScope {
             splitMessages(messagesToCompress)
@@ -964,17 +942,17 @@ class ChatService(
                 .awaitAll()
         }
 
-        // 构建新对话：旧摘要原样保留 + 新摘要追加（增量模式，时序不断）+ 最近消息
-        val newMessageNodes = buildList {
-            preservedSummaries.forEach { add(it.toMessageNode()) }
-            compressedSummaries.forEach { summary ->
-                add(UIMessage.user(summaryMarker + "\n" + summary).toMessageNode())
+        // 增量追加：旧摘要 + 新摘要；原文 messageNodes 不变
+        val newSummaryCache = buildString {
+            if (existingSummary.isNotBlank()) {
+                append(existingSummary)
+                append("\n\n")
             }
-            addAll(messagesToKeep.map { it.toMessageNode() })
-        }
+            append(compressedSummaries.joinToString("\n\n"))
+        }.trim()
+
         val newConversation = conversation.copy(
-            messageNodes = newMessageNodes,
-            chatSuggestions = emptyList(),
+            summaryCache = newSummaryCache.ifBlank { null },
         )
 
         saveConversation(conversationId, newConversation)

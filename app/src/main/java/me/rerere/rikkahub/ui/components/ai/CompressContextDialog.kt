@@ -134,6 +134,18 @@ fun CompressContextDialog(
                         )
                     }
 
+                    // Auto-compress threshold (per-assistant)
+                    if (assistant.autoCompressEnabled) {
+                        OutlinedNumberInput(
+                            value = assistant.autoCompressThreshold,
+                            onValueChange = { value ->
+                                onUpdateAssistant(assistant.copy(autoCompressThreshold = value.coerceAtLeast(1)))
+                            },
+                            label = "自动压缩触发阈值（消息条数）",
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+
                     // Additional context input
                     OutlinedTextField(
                         value = additionalPrompt,

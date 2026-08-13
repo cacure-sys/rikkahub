@@ -51,6 +51,7 @@ data class Assistant(
     val allowConversationSystemPrompt: Boolean = false, // 允许对话单独重写 system prompt
     val allowConversationPromptInjection: Boolean = false, // 允许对话单独绑定提示词注入
     val autoCompressEnabled: Boolean = false, // 自动压缩开关（助手级）
+    val autoCompressThreshold: Int = 100, // 自动压缩触发阈值（非摘要消息条数，助手级）
 )
 
 @Serializable
