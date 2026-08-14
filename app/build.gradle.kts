@@ -71,7 +71,10 @@ android {
 
     buildTypes {
         release {
-            signingConfig = signingConfigs.getByName("release")
+            // 未配置 keystore 时回退到 debug 签名，保证无 secret 的 GitHub Actions 也能产出可安装 APK
+            signingConfig = signingConfigs.getByName("release").let { cfg ->
+                if (cfg.storeFile != null) cfg else signingConfigs.getByName("debug")
+            }
             optimization {
                 enable = true
             }
