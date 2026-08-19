@@ -942,8 +942,14 @@ class ChatService(
                 ?: throw IllegalStateException("Failed to generate compressed summary")
         }
 
-        // 摘要随轮次累积膨胀，参考上下文只保留末尾一段，避免压缩请求自身超长
-        val existingContext = existingSummary.takeLast(12000)
+        // 从累积旧摘要中抽取「第一章·事件因果链」与「第四章·跨周期状态」作为增量参考，
+        // 让压缩 AI 据此判断截止轮次与已记录内容、避免重复；跳过第二、三章以削减 token。
+        // 若模型未按四章结构输出，则退化为截取末尾一段。
+        val existingContext = Regex(
+            "(?:#{1,6}\\s*)?第[一四]章\\s*·\\s*.+?(?=(?:#{1,6}\\s*)?第[一二三四]章\\s*·|\$)",
+            setOf(RegexOption.DOT_MATCHES_ALL)
+        ).findAll(existingSummary).joinToString("\n\n") { it.value.trim() }
+            .ifBlank { existingSummary.takeLast(12000) }
 
         val compressedSummaries = coroutineScope {
             splitMessages(messagesToCompress)
