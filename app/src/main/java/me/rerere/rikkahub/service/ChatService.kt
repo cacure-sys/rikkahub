@@ -518,7 +518,8 @@ class ChatService(
                         conversation = conversation,
                         additionalPrompt = "",
                         targetTokens = 2000,
-                        keepRecentMessages = 32
+                        keepRecentMessages = 32,
+                        incremental = true,
                     ).onFailure {
                         it.printStackTrace()
                     }.onSuccess {
@@ -871,7 +872,8 @@ class ChatService(
         conversation: Conversation,
         additionalPrompt: String,
         targetTokens: Int,
-        keepRecentMessages: Int = 32
+        keepRecentMessages: Int = 32,
+        incremental: Boolean = false,
     ): Result<Unit> = runCatching {
         val settings = settingsStore.settingsFlow.first()
         val model = settings.findModelById(settings.compressModelId)
@@ -888,8 +890,8 @@ class ChatService(
         // 旧摘要作为增量参考（只读拼装用）；原文历史完整保留，仅更新 summaryCache
         val existingSummary = conversation.summaryCache.orEmpty()
 
-        // 摘要已覆盖的消息条数（从最早一条起算）；本次只压缩「新增未覆盖」部分，实现少量多次增量压缩
-        val covered = conversation.summaryCoveredCount.coerceIn(0, allMessages.size)
+        // 自动压缩为增量：只压摘要未覆盖的新增；手动压缩为全量：从第 0 条压全部历史
+        val covered = if (incremental) conversation.summaryCoveredCount.coerceIn(0, allMessages.size) else 0
         val uncompressed = allMessages.drop(covered)
 
         // 只压缩除最近 N 条以外的未覆盖消息
@@ -935,21 +937,24 @@ class ChatService(
             val result = providerHandler.generateText(
                 providerSetting = provider,
                 messages = listOf(UIMessage.user(prompt)),
-                params = backgroundTextGenerationParams(model),
+                params = backgroundTextGenerationParams(model, ReasoningLevel.OFF),
             )
 
             return result.message.toText().trim().takeIf { it.isNotBlank() }
                 ?: throw IllegalStateException("Failed to generate compressed summary")
         }
 
-        // 从累积旧摘要中抽取「第一、三、四章」作为增量参考：第一章事件因果链判截止轮次、
-        // 第三章梗与暗号避免梗重复、第四章跨周期状态做续写锚点；跳过第二章信息差削减 token。
-        // 若模型未按四章结构输出，则退化为截取末尾一段。
-        val existingContext = Regex(
-            "(?:#{1,6}\\s*)?第[一三四]章\\s*·\\s*.+?(?=(?:#{1,6}\\s*)?第[一二三四]章\\s*·|\$)",
-            setOf(RegexOption.DOT_MATCHES_ALL)
-        ).findAll(existingSummary).joinToString("\n\n") { it.value.trim() }
-            .ifBlank { existingSummary.takeLast(12000) }
+        // 增量压缩才把旧摘要章节作为参考（第一章判截止轮次、第三章避免梗重复、第四章做续写锚点）；
+        // 手动全量压缩传空，按首次压缩从头覆盖。
+        val existingContext = if (incremental) {
+            Regex(
+                "(?:#{1,6}\\s*)?第[一三四]章\\s*·\\s*.+?(?=(?:#{1,6}\\s*)?第[一二三四]章\\s*·|\$)",
+                setOf(RegexOption.DOT_MATCHES_ALL)
+            ).findAll(existingSummary).joinToString("\n\n") { it.value.trim() }
+                .ifBlank { existingSummary.takeLast(12000) }
+        } else {
+            ""
+        }
 
         val compressedSummaries = coroutineScope {
             splitMessages(messagesToCompress)
@@ -957,14 +962,18 @@ class ChatService(
                 .awaitAll()
         }
 
-        // 增量追加：旧摘要 + 新摘要；原文 messageNodes 不变
-        val newSummaryCache = buildString {
-            if (existingSummary.isNotBlank()) {
-                append(existingSummary)
-                append("\n\n")
-            }
-            append(compressedSummaries.joinToString("\n\n"))
-        }.trim()
+        // 增量：旧摘要 + 新摘要；全量：仅新摘要（覆盖旧摘要）。原文 messageNodes 不变
+        val newSummaryCache = if (incremental) {
+            buildString {
+                if (existingSummary.isNotBlank()) {
+                    append(existingSummary)
+                    append("\n\n")
+                }
+                append(compressedSummaries.joinToString("\n\n"))
+            }.trim()
+        } else {
+            compressedSummaries.joinToString("\n\n").trim()
+        }
 
         val newConversation = conversation.copy(
             summaryCache = newSummaryCache.ifBlank { null },
