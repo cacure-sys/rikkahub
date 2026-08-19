@@ -942,11 +942,11 @@ class ChatService(
                 ?: throw IllegalStateException("Failed to generate compressed summary")
         }
 
-        // 从累积旧摘要中抽取「第一章·事件因果链」与「第四章·跨周期状态」作为增量参考，
-        // 让压缩 AI 据此判断截止轮次与已记录内容、避免重复；跳过第二、三章以削减 token。
+        // 从累积旧摘要中抽取「第一、三、四章」作为增量参考：第一章事件因果链判截止轮次、
+        // 第三章梗与暗号避免梗重复、第四章跨周期状态做续写锚点；跳过第二章信息差削减 token。
         // 若模型未按四章结构输出，则退化为截取末尾一段。
         val existingContext = Regex(
-            "(?:#{1,6}\\s*)?第[一四]章\\s*·\\s*.+?(?=(?:#{1,6}\\s*)?第[一二三四]章\\s*·|\$)",
+            "(?:#{1,6}\\s*)?第[一三四]章\\s*·\\s*.+?(?=(?:#{1,6}\\s*)?第[一二三四]章\\s*·|\$)",
             setOf(RegexOption.DOT_MATCHES_ALL)
         ).findAll(existingSummary).joinToString("\n\n") { it.value.trim() }
             .ifBlank { existingSummary.takeLast(12000) }
