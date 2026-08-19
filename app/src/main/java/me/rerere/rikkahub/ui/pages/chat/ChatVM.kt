@@ -214,6 +214,11 @@ class ChatVM(
                 keepRecentMessages
             ).onFailure {
                 chatService.addError(it, title = context.getString(R.string.error_title_compress_conversation))
+                android.widget.Toast.makeText(
+                    context,
+                    "压缩失败: ${it.javaClass.simpleName}: ${it.message}",
+                    android.widget.Toast.LENGTH_LONG
+                ).show()
             }
         }
     }
