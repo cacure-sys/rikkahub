@@ -510,17 +510,19 @@ class ChatService(
 
             // 自动压缩：生成前同步触发（与生成同一 job，可取消、无竞态）
             if (assistant.autoCompressEnabled) {
-                val uncompressedCount = (conversation.currentMessages.size - conversation.summaryCoveredCount)
-                    .coerceAtLeast(0)
-                if (uncompressedCount > assistant.autoCompressThreshold) {
-                    Logging.log(TAG, "Auto-compress triggered before generation: $uncompressedCount uncompressed messages")
+                val summaryMarker = "[COMPRESSED_SUMMARY]"
+                val regularCount = conversation.currentMessages.count { msg ->
+                    val text = msg.toText().orEmpty()
+                    !(msg.role == MessageRole.USER && text.startsWith(summaryMarker))
+                }
+                if (regularCount > assistant.autoCompressThreshold) {
+                    Logging.log(TAG, "Auto-compress triggered before generation: $regularCount messages")
                     compressConversation(
                         conversationId = conversationId,
                         conversation = conversation,
                         additionalPrompt = "",
                         targetTokens = 2000,
                         keepRecentMessages = 32,
-                        incremental = true,
                     ).onFailure {
                         it.printStackTrace()
                     }.onSuccess {
@@ -874,7 +876,6 @@ class ChatService(
         additionalPrompt: String,
         targetTokens: Int,
         keepRecentMessages: Int = 32,
-        incremental: Boolean = false,
     ): Result<Unit> = runCatching {
         val settings = settingsStore.settingsFlow.first()
         val model = settings.findModelById(settings.compressModelId)
@@ -887,22 +888,31 @@ class ChatService(
 
         val maxMessagesPerChunk = 256
         val allMessages = conversation.currentMessages
+        val summaryMarker = "[COMPRESSED_SUMMARY]"
 
-        // 旧摘要作为增量参考（只读拼装用）；原文历史完整保留，仅更新 summaryCache
-        val existingSummary = conversation.summaryCache.orEmpty()
+        // 已有摘要消息永不重压；只压缩非摘要消息
+        val preservedSummaries = mutableListOf<UIMessage>()
+        val regularMessages = mutableListOf<UIMessage>()
+        allMessages.forEach { msg ->
+            val text = msg.toText().orEmpty()
+            if (msg.role == MessageRole.USER && text.startsWith(summaryMarker)) {
+                preservedSummaries.add(msg)
+            } else {
+                regularMessages.add(msg)
+            }
+        }
 
-        // 自动压缩为增量：只压摘要未覆盖的新增；手动压缩为全量：从第 0 条压全部历史
-        val covered = if (incremental) conversation.summaryCoveredCount.coerceIn(0, allMessages.size) else 0
-        val uncompressed = allMessages.drop(covered)
-
-        // 只压缩除最近 N 条以外的未覆盖消息
+        // 只压缩非摘要消息，保留最近 N 条不压
         val messagesToCompress: List<UIMessage>
-        if (keepRecentMessages > 0 && uncompressed.size > keepRecentMessages) {
-            messagesToCompress = uncompressed.dropLast(keepRecentMessages)
+        val messagesToKeep: List<UIMessage>
+        if (keepRecentMessages > 0 && regularMessages.size > keepRecentMessages) {
+            messagesToCompress = regularMessages.dropLast(keepRecentMessages)
+            messagesToKeep = regularMessages.takeLast(keepRecentMessages)
         } else if (keepRecentMessages > 0) {
             throw IllegalStateException(context.getString(R.string.chat_page_compress_not_enough_messages))
         } else {
-            messagesToCompress = uncompressed
+            messagesToCompress = regularMessages
+            messagesToKeep = emptyList()
         }
 
         fun splitMessages(messages: List<UIMessage>): List<List<UIMessage>> {
@@ -954,43 +964,39 @@ class ChatService(
                 ?: throw IllegalStateException("Failed to generate compressed summary")
         }
 
-        // 增量压缩才把旧摘要章节作为参考（第一章判截止轮次、第三章避免梗重复、第四章做续写锚点）；
-        // 手动全量压缩传空，按首次压缩从头覆盖。
-        val existingContext = if (incremental) {
+        // 从已有摘要抽取「第一、三、四章」作为增量参考，避免重复记录
+        val existingContext = preservedSummaries.joinToString("\n\n") { msg ->
+            val full = msg.toText().orEmpty().removePrefix(summaryMarker).trim()
             Regex(
                 "(?:#{1,6}\\s*)?第[一三四]章\\s*·\\s*.+?(?=(?:#{1,6}\\s*)?第[一二三四]章\\s*·|\$)",
                 setOf(RegexOption.DOT_MATCHES_ALL)
-            ).findAll(existingSummary).joinToString("\n\n") { it.value.trim() }
-                .ifBlank { existingSummary.takeLast(12000) }
-        } else {
-            ""
+            ).findAll(full).joinToString("\n\n") { it.value.trim() }
+                .ifBlank { full }
         }
 
         val compressedSummaries = coroutineScope {
             splitMessages(messagesToCompress)
-                .map { chunk -> async { compressMessages(chunk, existingContext, covered) } }
+                .map { chunk -> async { compressMessages(chunk, existingContext, 0) } }
                 .awaitAll()
         }
 
-        // 增量：旧摘要 + 新摘要；全量：仅新摘要（覆盖旧摘要）。原文 messageNodes 不变
-        val newSummaryCache = if (incremental) {
-            buildString {
-                if (existingSummary.isNotBlank()) {
-                    append(existingSummary)
-                    append("\n\n")
-                }
-                append(compressedSummaries.joinToString("\n\n"))
-            }.trim()
-        } else {
-            compressedSummaries.joinToString("\n\n").trim()
+        // 历史被摘要替代：旧摘要原样保留 + 新摘要追加 + 最近 N 条原文
+        val newMessageNodes = buildList {
+            preservedSummaries.forEach { add(it.toMessageNode()) }
+            compressedSummaries.forEach { summary ->
+                add(UIMessage.user(summaryMarker + "\n" + summary).toMessageNode())
+            }
+            addAll(messagesToKeep.map { it.toMessageNode() })
         }
 
         val newConversation = conversation.copy(
-            summaryCache = newSummaryCache.ifBlank { null },
-            summaryCoveredCount = covered + messagesToCompress.size,
+            messageNodes = newMessageNodes,
+            chatSuggestions = emptyList(),
+            summaryCache = null,
+            summaryCoveredCount = 0,
         )
 
-        Logging.log(TAG, "compressConversation: 完成，压缩 ${messagesToCompress.size} 条，summaryCache=${newSummaryCache.length} 字符")
+        Logging.log(TAG, "compressConversation: 完成，压缩 ${messagesToCompress.size} 条，保留最近 ${messagesToKeep.size} 条")
         saveConversation(conversationId, newConversation)
     }.onFailure { e ->
         Logging.log(TAG, "compressConversation 失败: ${e.javaClass.simpleName}: ${e.message}")
