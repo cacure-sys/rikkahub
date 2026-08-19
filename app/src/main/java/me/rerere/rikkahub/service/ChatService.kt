@@ -939,14 +939,18 @@ class ChatService(
             providerHandler.streamText(
                 providerSetting = provider,
                 messages = listOf(UIMessage.user(prompt)),
-                params = backgroundTextGenerationParams(model),
+                params = backgroundTextGenerationParams(model, ReasoningLevel.LOW),
             ).collect { chunk ->
                 if (chunk is StreamChunk.TextDelta) {
                     textBuilder.append(chunk.text)
                 }
             }
 
-            return textBuilder.toString().trim().takeIf { it.isNotBlank() }
+            val resultText = textBuilder.toString().trim()
+            if (resultText.isBlank()) {
+                Logging.log(TAG, "compressMessages: 流式结果为空白，chunk=${messages.size} 条，prompt 长度=${prompt.length}")
+            }
+            return resultText.takeIf { it.isNotBlank() }
                 ?: throw IllegalStateException("Failed to generate compressed summary")
         }
 
@@ -986,7 +990,10 @@ class ChatService(
             summaryCoveredCount = covered + messagesToCompress.size,
         )
 
+        Logging.log(TAG, "compressConversation: 完成，压缩 ${messagesToCompress.size} 条，summaryCache=${newSummaryCache.length} 字符")
         saveConversation(conversationId, newConversation)
+    }.onFailure { e ->
+        Logging.log(TAG, "compressConversation 失败: ${e.javaClass.simpleName}: ${e.message}")
     }
 
     // ---- 对话状态更新 ----
