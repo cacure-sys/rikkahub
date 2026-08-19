@@ -33,6 +33,8 @@ data class Conversation(
     val folderId: Uuid? = null,
     // 自动压缩生成的摘要缓存（只读拼装用，原文历史保留）
     val summaryCache: String? = null,
+    // 摘要已覆盖的消息条数（从最早一条起算），用于自动压缩触发判断
+    val summaryCoveredCount: Int = 0,
     @Transient
     val newConversation: Boolean = false
 ) {

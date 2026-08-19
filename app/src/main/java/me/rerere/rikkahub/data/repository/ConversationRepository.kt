@@ -363,6 +363,7 @@ class ConversationRepository(
             workspaceCwd = conversation.workspaceCwd ?: "",
             folderId = conversation.folderId?.toString() ?: "",
             summaryCache = conversation.summaryCache ?: "",
+            summaryCoveredCount = conversation.summaryCoveredCount,
         )
     }
 
@@ -385,6 +386,7 @@ class ConversationRepository(
             workspaceCwd = conversationEntity.workspaceCwd.ifEmpty { null },
             folderId = conversationEntity.folderId.ifEmpty { null }?.let { Uuid.parse(it) },
             summaryCache = conversationEntity.summaryCache.ifEmpty { null },
+            summaryCoveredCount = conversationEntity.summaryCoveredCount,
         )
     }
 

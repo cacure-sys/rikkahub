@@ -34,4 +34,6 @@ data class ConversationEntity(
     val folderId: String = "",
     @ColumnInfo("summary_cache", defaultValue = "")
     val summaryCache: String = "",
+    @ColumnInfo("summary_covered_count", defaultValue = "0")
+    val summaryCoveredCount: Int = 0,
 )
