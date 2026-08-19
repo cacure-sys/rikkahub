@@ -939,7 +939,7 @@ class ChatService(
             providerHandler.streamText(
                 providerSetting = provider,
                 messages = listOf(UIMessage.user(prompt)),
-                params = backgroundTextGenerationParams(model, ReasoningLevel.LOW),
+                params = backgroundTextGenerationParams(model, ReasoningLevel.OFF),
             ).collect { chunk ->
                 if (chunk is StreamChunk.TextDelta) {
                     textBuilder.append(chunk.text)
