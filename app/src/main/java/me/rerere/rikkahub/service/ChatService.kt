@@ -37,6 +37,7 @@ import me.rerere.ai.provider.ProviderManager
 import me.rerere.ai.provider.TextGenerationParams
 import me.rerere.ai.ui.ToolApprovalState
 import me.rerere.ai.ui.UIMessage
+import me.rerere.ai.ui.StreamChunk
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.canResumeToolExecution
 import me.rerere.ai.ui.finishPendingTools
@@ -934,13 +935,18 @@ class ChatService(
                 "locale" to Locale.getDefault().displayName
             )
 
-            val result = providerHandler.generateText(
+            val textBuilder = StringBuilder()
+            providerHandler.streamText(
                 providerSetting = provider,
                 messages = listOf(UIMessage.user(prompt)),
-                params = backgroundTextGenerationParams(model, ReasoningLevel.OFF),
-            )
+                params = backgroundTextGenerationParams(model),
+            ).collect { chunk ->
+                if (chunk is StreamChunk.TextDelta) {
+                    textBuilder.append(chunk.text)
+                }
+            }
 
-            return result.message.toText().trim().takeIf { it.isNotBlank() }
+            return textBuilder.toString().trim().takeIf { it.isNotBlank() }
                 ?: throw IllegalStateException("Failed to generate compressed summary")
         }
 
