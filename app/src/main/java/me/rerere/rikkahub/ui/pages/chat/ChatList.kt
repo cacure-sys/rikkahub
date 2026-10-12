@@ -45,7 +45,6 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.FilledIconButton
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.HorizontalFloatingToolbar
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -94,6 +93,7 @@ import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.datastore.getAssistantById
 import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.data.model.MessageNode
+import me.rerere.rikkahub.data.model.isCompressedSummary
 import me.rerere.rikkahub.service.ChatError
 import me.rerere.rikkahub.ui.components.message.ChatMessage
 import me.rerere.rikkahub.ui.components.ui.ErrorCardsDisplay
@@ -127,6 +127,7 @@ fun ChatList(
     onEdit: (UIMessage) -> Unit = {},
     onForkMessage: (UIMessage) -> Unit = {},
     onDelete: (UIMessage) -> Unit = {},
+    onRestoreCompressed: (() -> Unit)? = null,
     onUpdateMessage: (MessageNode) -> Unit = {},
     onClickSuggestion: (String) -> Unit = {},
     onTranslate: ((UIMessage, java.util.Locale) -> Unit)? = null,
@@ -179,6 +180,39 @@ fun ChatList(
                 onToggleFavorite = onToggleFavorite,
                 onConversationSystemPromptChange = onConversationSystemPromptChange,
             )
+        }
+    }
+}
+
+/** 归档区块的提示胶囊：说明这里开始的内容不发送给模型，并给一个就地的恢复入口。 */
+@Composable
+private fun ArchivedHint(count: Int, onRestore: (() -> Unit)?) {
+    Surface(
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        modifier = Modifier.padding(bottom = 6.dp),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
+        ) {
+            Text(
+                text = "已归档 $count 条 · 不发送给模型",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (onRestore != null) {
+                Text(
+                    text = "恢复",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier
+                        .clip(CircleShape)
+                        .clickable { onRestore() }
+                        .padding(horizontal = 6.dp, vertical = 2.dp),
+                )
+            }
         }
     }
 }
@@ -318,17 +352,12 @@ private fun ChatListNormal(
                 key = { index, item -> item.id },
             ) { index, node ->
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    // 归档区块：以下原文保留在库里（可展开、可一键恢复），但不再发送给模型
+                    // 归档区块：以下原文留存本地、不发送给模型。一个小胶囊替代原来那行说教文字
                     if (node.archived && (index == 0 || !conversation.messageNodes[index - 1].archived)) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(
-                                text = "以下 ${conversation.messageNodes.count { it.archived }} 条已归档：" +
-                                    "原文保留在本地（不发送给模型），可在输入栏菜单里一键恢复",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            HorizontalDivider(modifier = Modifier.padding(top = 4.dp))
-                        }
+                        ArchivedHint(
+                            count = conversation.messageNodes.count { it.archived },
+                            onRestore = onRestoreCompressed,
+                        )
                     }
                     ListSelectableItem(
                         key = node.id,
@@ -358,6 +387,12 @@ private fun ChatListNormal(
                             },
                             onDelete = {
                                 onDelete(node.currentMessage)
+                            },
+                            // 只有"这条是压缩记忆"时才给恢复入口，其余消息的操作面板不变
+                            onRestoreCompressed = if (node.currentMessage.isCompressedSummary()) {
+                                onRestoreCompressed
+                            } else {
+                                null
                             },
                             onShare = {
                                 selecting = true  // 使用 CoroutineScope 延迟状态更新

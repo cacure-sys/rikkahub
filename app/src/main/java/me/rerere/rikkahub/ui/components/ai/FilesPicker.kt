@@ -53,8 +53,6 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Job
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.hugeicons.HugeIcons
-import me.rerere.rikkahub.data.model.isCompressedSummary
-import me.rerere.hugeicons.stroke.ArrowTurnBackward
 import me.rerere.hugeicons.stroke.Voice
 import me.rerere.hugeicons.stroke.Camera01
 import me.rerere.hugeicons.stroke.Codesandbox
@@ -250,48 +248,6 @@ internal fun FilesPicker(
                     onShowCompressDialogChange(true)
                 },
         )
-
-        // Restore Archived (undo compression) Button
-        // 压缩现在是"只归档、不删原文"（见 Migration_27_28）：这里把归档的原文恢复成正常消息，
-        // 并丢弃那条压缩记忆。"压坏了能重来"就靠这个按钮。
-        val archivedCount = conversation.messageNodes.count { it.archived }
-        if (archivedCount > 0) {
-            ListItem(
-                leadingContent = {
-                    Icon(
-                        imageVector = HugeIcons.ArrowTurnBackward,
-                        contentDescription = "恢复被压缩的原文",
-                    )
-                },
-                headlineContent = {
-                    Text("恢复被压缩的原文")
-                },
-                supportingContent = {
-                    Text("$archivedCount 条已归档的原文会重新发送给模型，那份压缩记忆会被丢弃")
-                },
-                colors = ListItemDefaults.colors(
-                    containerColor = MaterialTheme.colorScheme.surfaceContainer
-                ),
-                modifier = Modifier
-                    .clip(MaterialTheme.shapes.large)
-                    .clickable {
-                        onUpdateConversation(
-                            conversation.copy(
-                                messageNodes = conversation.messageNodes
-                                    .filterNot { node ->
-                                        node.messages.getOrNull(node.selectIndex)
-                                            ?.isCompressedSummary() == true
-                                    }
-                                    .map { node ->
-                                        if (node.archived) node.copy(archived = false) else node
-                                    },
-                                summaryCache = null,
-                                summaryCoveredCount = 0,
-                            )
-                        )
-                    },
-            )
-        }
 
         // Workspace CWD
         val boundWorkspace = remember(workspaces, assistant.workspaceId) {

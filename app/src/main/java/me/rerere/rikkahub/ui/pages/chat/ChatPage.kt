@@ -79,6 +79,8 @@ import me.rerere.rikkahub.ui.components.ai.completion.WorkspaceCompletionProvide
 import me.rerere.rikkahub.ui.components.ai.rememberChatAttachmentPickerActions
 import me.rerere.rikkahub.ui.context.LocalNavController
 import me.rerere.rikkahub.ui.context.LocalToaster
+import me.rerere.rikkahub.ui.components.ui.RikkaConfirmDialog
+import me.rerere.rikkahub.data.model.isCompressedSummary
 import me.rerere.rikkahub.ui.context.Navigator
 import me.rerere.rikkahub.ui.hooks.ChatInputState
 import me.rerere.rikkahub.ui.hooks.EditStateContent
@@ -280,6 +282,8 @@ private fun ChatPageContent(
 ) {
     val scope = rememberCoroutineScope()
     val toaster = LocalToaster.current
+    // 撤销压缩的确认弹窗状态（与压缩对话框同一个作用域，ChatList 就在下方）
+    var showRestoreConfirm by remember { mutableStateOf(false) }
     val workspaceRepository: WorkspaceRepository = koinInject()
     var previewMode by rememberSaveable { mutableStateOf(false) }
     val hazeState = rememberHazeState()
@@ -515,12 +519,50 @@ private fun ChatPageContent(
                 onToggleFavorite = { node ->
                     vm.toggleMessageFavorite(node)
                 },
+                // 撤销压缩：入口挂在"记忆消息"上（看到坏了就地修），点了先弹确认
+                onRestoreCompressed = { showRestoreConfirm = true },
                 onConversationSystemPromptChange = { newPrompt ->
                     vm.updateConversation(conversation.copy(customSystemPrompt = newPrompt))
                     vm.saveConversationAsync()
                 },
             )
         }
+
+        // 撤销压缩：先确认再动手。原文回来是可逆方向，但那份记忆是被丢弃的、找不回
+        RikkaConfirmDialog(
+            show = showRestoreConfirm,
+            title = "恢复被压缩的原文",
+            text = {
+                Text(
+                    "把这段对话里所有已归档的原文（${conversation.messageNodes.count { it.archived }} 条）" +
+                        "恢复成正常消息、重新发送给模型；\n" +
+                        "同时丢弃那份压缩记忆（[COMPRESSED_SUMMARY]），丢弃后找不回来。"
+                )
+            },
+            confirmText = "恢复",
+            dismissText = "取消",
+            onConfirm = {
+                showRestoreConfirm = false
+                val restoredCount = conversation.messageNodes.count { it.archived }
+                vm.updateConversation(
+                    conversation.copy(
+                        messageNodes = conversation.messageNodes
+                            .filterNot { node ->
+                                node.messages.getOrNull(node.selectIndex)?.isCompressedSummary() == true
+                            }
+                            .map { node -> if (node.archived) node.copy(archived = false) else node },
+                        summaryCache = null,
+                        summaryCoveredCount = 0,
+                    )
+                )
+                vm.saveConversationAsync()
+                toaster.show(
+                    message = "已恢复 $restoredCount 条原文，压缩记忆已丢弃",
+                    type = ToastType.Success,
+                )
+            },
+            onDismiss = { showRestoreConfirm = false },
+        )
 
         if (showFilesSheet) {
             ChatFilesPickerSheet(
