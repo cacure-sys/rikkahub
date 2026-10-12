@@ -1,5 +1,6 @@
 package me.rerere.rikkahub.data.ai.transformers
 
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.BitmapRegionDecoder
 import android.graphics.Rect
