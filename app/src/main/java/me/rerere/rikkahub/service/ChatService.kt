@@ -1020,7 +1020,9 @@ class ChatService(
                 if (additionalPrompt.isNotBlank()) appendLine(additionalPrompt)
                 if (warning.isNotBlank()) appendLine(warning)
             }.trim()
-            val prompt = (COMPRESS_BUDGET_CLAUSE + "\n\n" + settings.compressPrompt).applyPlaceholders(
+            // 不再前置"预算硬约束"：长度交给提示词自己的叙述纪律（"篇幅以事件密度为准"）。
+            // 硬顶会把记忆碾成骨架，而丢掉的内容换不回来；现在防跑偏靠提示词纪律 + 归档可逆。
+            val prompt = settings.compressPrompt.applyPlaceholders(
                 "content" to content,
                 "target_tokens" to budgetTokens.toString(),
                 "additional_context" to additional,
@@ -1094,28 +1096,18 @@ class ChatService(
             .flatten()
             .map { it.value }
 
-        var summary = if (chunks.size == 1) {
+        val summary = if (chunks.size == 1) {
             fragments.first()
         } else {
             generate(contentWith(fragments.joinToString("\n\n")), targetTokens)
         }
 
-        // 预算强制：提示词写了目标，模型不一定照做（实测目标 2000 token 却输出 5500）
-        val overBudget = estimateTokens(summary)
-        if (overBudget > (targetTokens * (1.0 + BUDGET_SLACK)).toInt()) {
-            Logging.log(TAG, "compressConversation: 摘要超预算（约 $overBudget token > $targetTokens），执行二次压缩")
-            summary = runCatching {
-                generate(
-                    content = contentWith("（本次没有新对话。请把上面的既有记忆压进预算内，不要新增内容。）"),
-                    budgetTokens = targetTokens,
-                    warning = "⚠️ 上一次输出约 $overBudget token，超出预算 $targetTokens。" +
-                        "本次必须达标：从第一章最早的轮次开始整行合并、并入阶段行、再并入时代概述；宁可粗，不可超。",
-                )
-            }.getOrElse { error ->
-                Logging.log(TAG, "compressConversation: 二次压缩失败，沿用首次结果：${error.message}")
-                summary
-            }
-        }
+        // 只统计、不强制：记忆长度由提示词的叙述纪律决定，不再做"超预算二次压缩"。
+        // （旧行为是把记忆硬碾到预算内，代价是细节丢失，而丢掉的细节换不回来。）
+        Logging.log(
+            TAG,
+            "compressConversation: 记忆长度约 ${estimateTokens(summary)} token（不设上限）"
+        )
 
         // 折叠 = 归档（不再删除原文）：
         // 只把"被本次成功摘要覆盖"的节点标记为 archived，其余原样保留（含压缩失败的块 → 下次重试）。
@@ -1558,19 +1550,9 @@ private const val MAX_COMPRESS_INPUT_CHARS = 40_000
 private const val MIN_CHUNK_BUDGET_TOKENS = 300
 private const val MIN_RETRY_SPLIT_CHARS = 2_000
 
-/** 超出目标这个比例就触发二次压缩 */
-private const val BUDGET_SLACK = 0.25
-
-/**
- * 预算硬约束，拼在用户提示词之前。
- * 用来兜住"长度不限 / 宁多不漏"这类写法——生成后还会用 estimateTokens 校验一次，不指望模型自觉。
- */
-private val COMPRESS_BUDGET_CLAUSE = """
-【预算硬约束 · 与下方提示词冲突时以本节为准】
-1. 你的完整输出不得超过 {target_tokens} token；宁可粗，不可超。
-2. 超出时从最旧的内容开始变粗：逐条 → 合并成段 → 只留时代概述；近期细节最后才动。
-3. 你输出的是"合并后的完整记忆"：既有记忆允许被改写、合并、删减——这是设计，不是篡改原文。
-""".trimIndent()
+// 注：这里曾有一个拼在用户提示词之前的"预算硬约束"段落（要求输出 ≤ {target_tokens} token，
+// 并在超出 25% 时触发二次压缩）。已按要求移除：长度改由提示词的叙述纪律控制。
+// {target_tokens} 变量照旧传入，供提示词自行取用。
 
 private fun UIMessage.isCompressedSummary(): Boolean =
     role == MessageRole.USER && toText().orEmpty().startsWith(SUMMARY_MARKER)
