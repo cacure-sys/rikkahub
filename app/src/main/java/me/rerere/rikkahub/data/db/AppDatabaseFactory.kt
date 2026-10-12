@@ -12,6 +12,7 @@ import me.rerere.rikkahub.data.db.migrations.Migration_14_15
 import me.rerere.rikkahub.data.db.migrations.Migration_15_16
 import me.rerere.rikkahub.data.db.migrations.Migration_25_26
 import me.rerere.rikkahub.data.db.migrations.Migration_26_27
+import me.rerere.rikkahub.data.db.migrations.Migration_27_28
 
 /** Shared schema, migrations and extensions for the app and staged backup validation. */
 internal object AppDatabaseFactory {
@@ -19,7 +20,8 @@ internal object AppDatabaseFactory {
         Room.databaseBuilder(context, AppDatabase::class.java, name)
             .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
             // 24->25 由官方 autoMigration 负责（workspaces.shell_compatibility_mode）；
-            // 25->26 / 26->27 是本 fork 自动压缩功能的两列（见 MigrationHelpers 的说明）。
+            // 25->26 / 26->27 是本 fork 自动压缩功能的两列（见 MigrationHelpers 的说明）；
+            // 27->28 是压缩归档标记 message_node.archived（压缩不再删除原文，只归档）。
             .addMigrations(
                 Migration_6_7,
                 Migration_11_12,
@@ -28,6 +30,7 @@ internal object AppDatabaseFactory {
                 Migration_15_16,
                 Migration_25_26,
                 Migration_26_27,
+                Migration_27_28,
             )
             .addCallback(object : RoomDatabase.Callback() {
                 override fun onOpen(db: SupportSQLiteDatabase) {

@@ -28,5 +28,8 @@ data class MessageNodeEntity(
     @ColumnInfo("messages")
     val messages: String,  // JSON serialized List<UIMessage>
     @ColumnInfo("select_index")
-    val selectIndex: Int
+    val selectIndex: Int,
+    // 归档：被压缩折叠掉的原文仍留在库里（不参与请求构造，UI 折叠显示，可撤销恢复）
+    @ColumnInfo("archived", defaultValue = "0")
+    val archived: Boolean = false
 )

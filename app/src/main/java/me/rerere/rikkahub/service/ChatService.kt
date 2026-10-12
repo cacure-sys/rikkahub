@@ -1117,11 +1117,27 @@ class ChatService(
             }
         }
 
-        // 历史被一份合并记忆替代 + 最近 N 条原文；失败块原文原样保留
+        // 折叠 = 归档（不再删除原文）：
+        // 只把"被本次成功摘要覆盖"的节点标记为 archived，其余原样保留（含压缩失败的块 → 下次重试）。
+        // 旧的摘要消息节点被丢弃——它的内容已经折进这一份新记忆，而它的来源原文仍在 archive 里。
+        val summarizedIds = chunks
+            .filterIndexed { index, _ -> fragmentResults[index] != null }
+            .flatten()
+            .map { it.value.id }
+            .toSet()
+
         val newMessageNodes = buildList {
             add(UIMessage.user(SUMMARY_MARKER + "\n" + summary).toMessageNode())
-            failedMessages.forEach { add(it.toMessageNode()) }
-            addAll(messagesToKeep.map { it.toMessageNode() })
+            conversation.messageNodes.forEach { node ->
+                val selected = node.messages.getOrNull(node.selectIndex)
+                when {
+                    // 旧摘要：内容已并入新记忆，这条派生节点丢弃（原文仍在归档里，可重压）
+                    selected != null && selected.isCompressedSummary() -> Unit
+                    // 被本次摘要覆盖：归档，不删除
+                    selected != null && selected.id in summarizedIds -> add(node.copy(archived = true))
+                    else -> add(node)
+                }
+            }
         }
 
         val newConversation = conversation.copy(

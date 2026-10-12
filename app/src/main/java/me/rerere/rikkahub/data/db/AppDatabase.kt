@@ -39,10 +39,11 @@ import me.rerere.rikkahub.utils.JsonInstant
         FolderEntity::class,
     ],
     // 官方 2.5.6 占用到 25（24->25: workspaces 增加 shell_compatibility_mode）。
-    // 本 fork 的自动压缩功能需要额外两列，顺延为 25->26 / 26->27，因此当前版本是 27。
+    // 本 fork 的自动压缩功能需要额外两列，顺延为 25->26 / 26->27；
+    // 27->28 再加 message_node.archived —— 压缩改为"只归档、不删原文"，因此当前版本是 28。
     // 注意：历史上 fork 曾把这两列放在 25/26 号上，与官方 25 号撞车；
-    // 这两个手动迁移都做了"列已存在则跳过"的幂等保护，同时兼容官方库与旧的私设库。
-    version = 27,
+    // 这几个手动迁移都做了"列已存在则跳过"的幂等保护，同时兼容官方库与旧的私设库。
+    version = 28,
     autoMigrations = [
         AutoMigration(from = 1, to = 2),
         AutoMigration(from = 2, to = 3),

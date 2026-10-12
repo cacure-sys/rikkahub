@@ -49,7 +49,8 @@ data class Conversation(
      */
     val currentMessages
         get(): List<UIMessage> {
-            return messageNodes.map { node -> node.messages[node.selectIndex] }
+            // 归档节点（被压缩折叠掉的原文）不参与请求构造，但仍留在库里、仍在 FTS 里可搜
+            return messageNodes.filterNot { it.archived }.map { node -> node.messages[node.selectIndex] }
         }
 
     fun getMessageNodeByMessage(message: UIMessage): MessageNode? {
@@ -116,6 +117,9 @@ data class MessageNode(
     val selectIndex: Int = 0,
     @Transient
     val isFavorite: Boolean = false,
+    // 归档：被压缩折叠掉的原文，不参与请求构造，但保留在库里（可展开、可撤销）
+    // 放在参数末尾，避免影响原有的按位置传参调用
+    val archived: Boolean = false,
 ) {
     val currentMessage get() = if (messages.isEmpty() || selectIndex !in messages.indices) {
         throw IllegalStateException("MessageNode has no valid current message: messages.size=${messages.size}, selectIndex=$selectIndex")

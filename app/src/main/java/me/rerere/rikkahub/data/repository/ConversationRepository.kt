@@ -475,7 +475,8 @@ class ConversationRepository(
                             id = nodeId,
                             messages = messages,
                             selectIndex = entity.selectIndex,
-                            isFavorite = favoriteNodeIds.contains(nodeId)
+                            isFavorite = favoriteNodeIds.contains(nodeId),
+                            archived = entity.archived
                         )
                     )
                 }
@@ -492,7 +493,8 @@ class ConversationRepository(
                 conversationId = conversationId,
                 nodeIndex = index,
                 messages = JsonInstant.encodeToString(node.messages),
-                selectIndex = node.selectIndex
+                selectIndex = node.selectIndex,
+                archived = node.archived
             )
         }
         messageNodeDAO.insertAll(entities)
