@@ -38,7 +38,11 @@ import me.rerere.rikkahub.utils.JsonInstant
         WorkspaceEntity::class,
         FolderEntity::class,
     ],
-    version = 26,
+    // 官方 2.5.6 占用到 25（24->25: workspaces 增加 shell_compatibility_mode）。
+    // 本 fork 的自动压缩功能需要额外两列，顺延为 25->26 / 26->27，因此当前版本是 27。
+    // 注意：历史上 fork 曾把这两列放在 25/26 号上，与官方 25 号撞车；
+    // 这两个手动迁移都做了"列已存在则跳过"的幂等保护，同时兼容官方库与旧的私设库。
+    version = 27,
     autoMigrations = [
         AutoMigration(from = 1, to = 2),
         AutoMigration(from = 2, to = 3),
@@ -58,6 +62,7 @@ import me.rerere.rikkahub.utils.JsonInstant
         AutoMigration(from = 21, to = 22),
         AutoMigration(from = 22, to = 23, spec = Migration_22_23::class),
         AutoMigration(from = 23, to = 24),
+        AutoMigration(from = 24, to = 25),
     ]
 )
 @TypeConverters(TokenUsageConverter::class)
