@@ -1062,7 +1062,7 @@ class ChatService(
         }
 
         // 分块并行；单块直接产出合并记忆，多块先出片段、最后合并一次（总量 ≈ target，不是 target × 块数）
-        val fragmentResults: List<String?> = coroutineScope {
+        val rawFragmentResults: List<String?> = coroutineScope {
             chunks.map { chunk ->
                 async {
                     val text = chunk.joinToString("\n\n") {
@@ -1089,6 +1089,21 @@ class ChatService(
             }.awaitAll()
         }
 
+        // 模型有时不写记忆，而是回一句"抱歉，我无法协助…"——那在代码里是一次**成功的生成**。
+        // 若照收，这句拒绝会被当成记忆存下，而对应原文被归档、不再发送：剧情当场断，还得靠人发现。
+        // 所以"疑似拒绝 / 短到不像记忆"一律按失败处理：不归档那些消息（原文继续发送），并如实上报。
+        val fragmentResults: List<String?> = rawFragmentResults.map { text ->
+            if (text != null && looksLikeRefusal(text)) {
+                Logging.log(
+                    TAG,
+                    "compressConversation: 分块输出疑似拒绝或过短（${text.length} 字符），按失败处理，原文不归档"
+                )
+                null
+            } else {
+                text
+            }
+        }
+
         val fragments = fragmentResults.filterNotNull()
         if (fragments.isEmpty()) throw IllegalStateException("Failed to generate compressed summary")
         val failedMessages = chunks
@@ -1100,6 +1115,13 @@ class ChatService(
             fragments.first()
         } else {
             generate(contentWith(fragments.joinToString("\n\n")), targetTokens)
+        }
+
+        // 整份输出再兜一次：宁可这次不压（原文继续发送、报错可见），也不要存下一句拒绝
+        if (looksLikeRefusal(summary)) {
+            throw IllegalStateException(
+                "压缩输出疑似拒绝或过短（${summary.length} 字符），已放弃本次压缩，原文保持发送"
+            )
         }
 
         // 只统计、不强制：记忆长度由提示词的叙述纪律决定，不再做"超预算二次压缩"。
@@ -1136,7 +1158,9 @@ class ChatService(
             messageNodes = newMessageNodes,
             chatSuggestions = emptyList(),
             summaryCache = null,
-            summaryCoveredCount = roundBase + messagesToCompress.size,
+            // 只把"真正被记忆覆盖"的条数计入基数：失败块（含被判为拒绝的块）的原文仍然活跃、
+            // 下次还会被压缩，若也算进基数，下一轮的轮次号就会整体前移（编号错位）。
+            summaryCoveredCount = roundBase + messagesToCompress.size - failedMessages.size,
         )
 
         Logging.log(
@@ -1553,6 +1577,34 @@ private const val MIN_RETRY_SPLIT_CHARS = 2_000
 // 注：这里曾有一个拼在用户提示词之前的"预算硬约束"段落（要求输出 ≤ {target_tokens} token，
 // 并在超出 25% 时触发二次压缩）。已按要求移除：长度改由提示词的叙述纪律控制。
 // {target_tokens} 变量照旧传入，供提示词自行取用。
+
+/** 短于这个长度就不像一份记忆：判为失败，原文不归档 */
+private const val MIN_USABLE_SUMMARY_CHARS = 120
+
+/** 只在这么短的输出里出现的"抱歉/无法"才当作拒绝话术（记忆里角色道歉是正常的，不能误伤） */
+private const val REFUSAL_SCAN_MAX_CHARS = 600
+
+/** 拒绝话术（保守匹配，必须与长度判据配合使用） */
+private val REFUSAL_PATTERN = Regex(
+    "(抱歉|对不起|无法|不能|不便|恕难|作为.{0,6}(AI|人工智能|语言模型|助手)|" +
+        "I'?m sorry|I can(?:'?t|not)|I am unable|As an AI)",
+    RegexOption.IGNORE_CASE,
+)
+
+/**
+ * 压缩输出是否"不可用"（疑似拒绝或近乎空输出）。
+ *
+ * 为什么要判：模型回一句"抱歉，我无法协助"在代码里是一次成功的生成。若照收，
+ * 这句拒绝会变成记忆、对应的原文被归档不再发送——剧情断开而且没有任何提示。
+ * 因此宁可判失败：原文继续发送，失败照常上报。
+ *
+ * 判据保守（极短，或"短 + 拒绝话术"），避免误伤正常记忆里的道歉与"无法"。
+ */
+private fun looksLikeRefusal(text: String): Boolean {
+    val t = text.trim()
+    if (t.length < MIN_USABLE_SUMMARY_CHARS) return true
+    return t.length < REFUSAL_SCAN_MAX_CHARS && REFUSAL_PATTERN.containsMatchIn(t)
+}
 
 private fun UIMessage.isCompressedSummary(): Boolean =
     role == MessageRole.USER && toText().orEmpty().startsWith(SUMMARY_MARKER)
