@@ -641,10 +641,8 @@ class ChatService(
 
             // 自动压缩：生成前同步触发（与生成同一 job，可取消、无竞态）
             if (assistant.autoCompressEnabled) {
-                val summaryMarker = "[COMPRESSED_SUMMARY]"
                 val regularCount = conversation.currentMessages.count { msg ->
-                    val text = msg.toText().orEmpty()
-                    !(msg.role == MessageRole.USER && text.startsWith(summaryMarker))
+                    !msg.isCompressedSummary()
                 }
                 if (regularCount > assistant.autoCompressThreshold) {
                     Logging.log(TAG, "Auto-compress triggered before generation: $regularCount messages")
@@ -652,10 +650,11 @@ class ChatService(
                         conversationId = conversationId,
                         conversation = conversation,
                         additionalPrompt = "",
-                        targetTokens = 2000,
-                        keepRecentMessages = 32,
+                        targetTokens = AUTO_COMPRESS_TARGET_TOKENS,
+                        keepRecentMessages = AUTO_COMPRESS_KEEP_RECENT,
                     ).onFailure {
-                        it.printStackTrace()
+                        // 以前这里只 printStackTrace：失败后会话保持全量，用户看到的就是"压缩了还是全量"
+                        Logging.log(TAG, "Auto-compress 失败（本次生成沿用未压缩历史）: ${it.javaClass.simpleName}: ${it.message}")
                     }.onSuccess {
                         conversation = getConversationFlow(conversationId).value
                     }
@@ -716,7 +715,10 @@ class ChatService(
                 // 工具清单已在上游抽成前面的 val tools（ChatToolFactory + MCP 名校验）
                 tools = tools,
                 cachedSystemMessage = session.cachedSystemMessage,
-                conversationSummary = conversation.summaryCache,
+                // 旧版遗留的 summaryCache：只有在没有摘要消息时才注入，避免同一份内容发两遍（新机制把记忆放在摘要消息里）
+                conversationSummary = conversation.summaryCache?.takeIf { cache ->
+                    cache.isNotBlank() && conversation.currentMessages.none { it.isCompressedSummary() }
+                },
                 onSystemMessageBuilt = { msg ->
                     session.cachedSystemMessage = msg
                 },
@@ -977,62 +979,49 @@ class ChatService(
 
         val providerHandler = providerManager.getProviderByType(provider)
 
-        val maxMessagesPerChunk = 256
         val allMessages = conversation.currentMessages
-        val summaryMarker = "[COMPRESSED_SUMMARY]"
 
-        // 已有摘要消息永不重压；只压缩非摘要消息
-        val preservedSummaries = mutableListOf<UIMessage>()
-        val regularMessages = mutableListOf<UIMessage>()
-        allMessages.forEach { msg ->
-            val text = msg.toText().orEmpty()
-            if (msg.role == MessageRole.USER && text.startsWith(summaryMarker)) {
-                preservedSummaries.add(msg)
-            } else {
-                regularMessages.add(msg)
+        // 既有记忆：旧版遗留的 summaryCache + 已有摘要消息，全部并入本次重写
+        // （原来是"旧摘要原样保留 + 新摘要追加"，每压一次净增一份，最终堪比全量）
+        val previousMemory = buildString {
+            conversation.summaryCache?.trim()?.takeIf { it.isNotEmpty() }?.let { appendLine(it) }
+            allMessages.filter { it.isCompressedSummary() }.forEach { msg ->
+                if (isNotEmpty()) appendLine("\n---\n")
+                appendLine(msg.toText().orEmpty().removePrefix(SUMMARY_MARKER).trim())
             }
-        }
+        }.trim()
+
+        // 已折进记忆的消息条数：用它当轮次基数，保证轮次号跨压缩连续
+        val roundBase = conversation.summaryCoveredCount.coerceAtLeast(0)
 
         // 只压缩非摘要消息，保留最近 N 条不压
-        val messagesToCompress: List<UIMessage>
+        val regularEntries = allMessages.withIndex().filterNot { it.value.isCompressedSummary() }
+        val messagesToCompress: List<IndexedValue<UIMessage>>
         val messagesToKeep: List<UIMessage>
-        if (keepRecentMessages > 0 && regularMessages.size > keepRecentMessages) {
-            messagesToCompress = regularMessages.dropLast(keepRecentMessages)
-            messagesToKeep = regularMessages.takeLast(keepRecentMessages)
+        if (keepRecentMessages > 0 && regularEntries.size > keepRecentMessages) {
+            messagesToCompress = regularEntries.dropLast(keepRecentMessages)
+            messagesToKeep = regularEntries.takeLast(keepRecentMessages).map { it.value }
         } else if (keepRecentMessages > 0) {
             throw IllegalStateException(context.getString(R.string.chat_page_compress_not_enough_messages))
         } else {
-            messagesToCompress = regularMessages
+            messagesToCompress = regularEntries
             messagesToKeep = emptyList()
         }
 
-        fun splitMessages(messages: List<UIMessage>): List<List<UIMessage>> {
-            if (messages.size <= maxMessagesPerChunk) return listOf(messages)
-            val mid = messages.size / 2
-            val left = splitMessages(messages.subList(0, mid))
-            val right = splitMessages(messages.subList(mid, messages.size))
-            return left + right
-        }
+        // 按字符切块：原来按"每块 256 条"切，单块输入可达 256×2000 字符，极易撑爆压缩模型上下文
+        val chunks = splitMessagesByChars(messagesToCompress, MAX_COMPRESS_INPUT_CHARS)
+        val perChunkBudget = (targetTokens / chunks.size).coerceAtLeast(MIN_CHUNK_BUDGET_TOKENS)
 
-        suspend fun compressMessages(messages: List<UIMessage>, existingSummaryContext: String, roundOffset: Int): String {
-            val contentToCompress = messages.mapIndexed { index, msg ->
-                "[轮次 ${roundOffset + index + 1}] ${msg.summaryAsText(maxLength = 2000)}"
-            }.joinToString("\n\n")
-            val contextParts = buildString {
-                // 旧摘要作为只读参考：告诉压缩 AI 不要重复已有内容，只输出增量
-                if (existingSummaryContext.isNotBlank()) {
-                    appendLine("The following is an existing summary that has already been recorded. Do NOT repeat information already covered below. Only output NEW events, status changes, and updates since the existing summary. If new events contradict or supersede old information, explicitly note the update — the AI will read summaries in chronological order and will trust the newer entry.")
-                    appendLine(existingSummaryContext)
-                    appendLine("---")
-                }
-                if (additionalPrompt.isNotBlank()) {
-                    appendLine("Additional instructions from user: $additionalPrompt")
-                }
-            }
-            val prompt = settings.compressPrompt.applyPlaceholders(
-                "content" to contentToCompress,
-                "target_tokens" to targetTokens.toString(),
-                "additional_context" to contextParts,
+        // 一次生成：既有记忆 + 新内容 → 合并后的完整记忆（旧的允许被改写/合并/删减）
+        suspend fun generate(content: String, budgetTokens: Int, warning: String = ""): String {
+            val additional = buildString {
+                if (additionalPrompt.isNotBlank()) appendLine(additionalPrompt)
+                if (warning.isNotBlank()) appendLine(warning)
+            }.trim()
+            val prompt = (COMPRESS_BUDGET_CLAUSE + "\n\n" + settings.compressPrompt).applyPlaceholders(
+                "content" to content,
+                "target_tokens" to budgetTokens.toString(),
+                "additional_context" to additional,
                 "locale" to Locale.getDefault().displayName
             )
 
@@ -1054,34 +1043,82 @@ class ChatService(
 
             val resultText = textBuilder.toString().trim()
             if (resultText.isBlank()) {
-                Logging.log(TAG, "compressMessages: 流式结果为空白，chunk=${messages.size} 条，prompt 长度=${prompt.length}")
+                Logging.log(TAG, "compressConversation: 流式结果为空白，prompt 长度=${prompt.length}")
+                throw IllegalStateException("Failed to generate compressed summary")
             }
-            return resultText.takeIf { it.isNotBlank() }
-                ?: throw IllegalStateException("Failed to generate compressed summary")
+            return resultText
         }
 
-        // 从已有摘要抽取「第一、三、四章」作为增量参考，避免重复记录
-        val existingContext = preservedSummaries.joinToString("\n\n") { msg ->
-            val full = msg.toText().orEmpty().removePrefix(summaryMarker).trim()
-            Regex(
-                "(?:#{1,6}\\s*)?第[一三四]章\\s*·\\s*.+?(?=(?:#{1,6}\\s*)?第[一二三四]章\\s*·|\$)",
-                setOf(RegexOption.DOT_MATCHES_ALL)
-            ).findAll(full).joinToString("\n\n") { it.value.trim() }
-                .ifBlank { full }
+        fun contentWith(newPart: String): String = buildString {
+            appendLine("【既有记忆（可改写、可合并、可删减）】")
+            appendLine(previousMemory.ifBlank { "（空，本次为首次压缩）" })
+            appendLine()
+            appendLine("【本次新增对话】")
+            appendLine(newPart)
         }
 
-        val compressedSummaries = coroutineScope {
-            splitMessages(messagesToCompress)
-                .map { chunk -> async { compressMessages(chunk, existingContext, 0) } }
-                .awaitAll()
+        // 分块并行；单块直接产出合并记忆，多块先出片段、最后合并一次（总量 ≈ target，不是 target × 块数）
+        val fragmentResults: List<String?> = coroutineScope {
+            chunks.map { chunk ->
+                async {
+                    val text = chunk.joinToString("\n\n") {
+                        "[轮次 ${roundBase + it.index + 1}] ${it.value.summaryAsText(maxLength = 2000)}"
+                    }
+                    val budget = if (chunks.size == 1) targetTokens else perChunkBudget
+                    runCatching { generate(contentWith(text), budget) }
+                        .recoverCatching { first ->
+                            // 失败块拆半重试一次：避免"一块失败 → 整次压缩放弃 → 会话保持全量"
+                            val half = text.length / 2
+                            if (half < MIN_RETRY_SPLIT_CHARS) throw first
+                            generate(contentWith(text.take(half)), budget) + "\n\n" +
+                                generate(contentWith(text.substring(half)), budget)
+                        }
+                        .getOrElse { error ->
+                            // 仍失败：该块原文保留（宁可大，不可丢），绝不静默丢内容
+                            Logging.log(
+                                TAG,
+                                "compressConversation: 有分块压缩失败，改保留原文：${error.javaClass.simpleName}: ${error.message}"
+                            )
+                            null
+                        }
+                }
+            }.awaitAll()
         }
 
-        // 历史被摘要替代：旧摘要原样保留 + 新摘要追加 + 最近 N 条原文
+        val fragments = fragmentResults.filterNotNull()
+        if (fragments.isEmpty()) throw IllegalStateException("Failed to generate compressed summary")
+        val failedMessages = chunks
+            .filterIndexed { index, _ -> fragmentResults[index] == null }
+            .flatten()
+            .map { it.value }
+
+        var summary = if (chunks.size == 1) {
+            fragments.first()
+        } else {
+            generate(contentWith(fragments.joinToString("\n\n")), targetTokens)
+        }
+
+        // 预算强制：提示词写了目标，模型不一定照做（实测目标 2000 token 却输出 5500）
+        val overBudget = estimateTokens(summary)
+        if (overBudget > (targetTokens * (1.0 + BUDGET_SLACK)).toInt()) {
+            Logging.log(TAG, "compressConversation: 摘要超预算（约 $overBudget token > $targetTokens），执行二次压缩")
+            summary = runCatching {
+                generate(
+                    content = contentWith("（本次没有新对话。请把上面的既有记忆压进预算内，不要新增内容。）"),
+                    budgetTokens = targetTokens,
+                    warning = "⚠️ 上一次输出约 $overBudget token，超出预算 $targetTokens。" +
+                        "本次必须达标：从第一章最早的轮次开始整行合并、并入阶段行、再并入时代概述；宁可粗，不可超。",
+                )
+            }.getOrElse { error ->
+                Logging.log(TAG, "compressConversation: 二次压缩失败，沿用首次结果：${error.message}")
+                summary
+            }
+        }
+
+        // 历史被一份合并记忆替代 + 最近 N 条原文；失败块原文原样保留
         val newMessageNodes = buildList {
-            preservedSummaries.forEach { add(it.toMessageNode()) }
-            compressedSummaries.forEach { summary ->
-                add(UIMessage.user(summaryMarker + "\n" + summary).toMessageNode())
-            }
+            add(UIMessage.user(SUMMARY_MARKER + "\n" + summary).toMessageNode())
+            failedMessages.forEach { add(it.toMessageNode()) }
             addAll(messagesToKeep.map { it.toMessageNode() })
         }
 
@@ -1089,10 +1126,14 @@ class ChatService(
             messageNodes = newMessageNodes,
             chatSuggestions = emptyList(),
             summaryCache = null,
-            summaryCoveredCount = 0,
+            summaryCoveredCount = roundBase + messagesToCompress.size,
         )
 
-        Logging.log(TAG, "compressConversation: 完成，压缩 ${messagesToCompress.size} 条，保留最近 ${messagesToKeep.size} 条")
+        Logging.log(
+            TAG,
+            "compressConversation: 完成，压缩 ${messagesToCompress.size} 条 → 记忆 ${summary.length} 字符" +
+                "（约 ${estimateTokens(summary)} token），保留最近 ${messagesToKeep.size} 条，失败保留 ${failedMessages.size} 条"
+        )
         saveConversation(conversationId, newConversation)
     }.onFailure { e ->
         Logging.log(TAG, "compressConversation 失败: ${e.javaClass.simpleName}: ${e.message}")
@@ -1484,4 +1525,71 @@ class ChatService(
         jobs.forEach { it.join() }
         finishInterruptedPendingTools(conversationId)
     }
+}
+
+// ---- 压缩（工作内存）相关：文件级常量与工具 ----
+
+private const val SUMMARY_MARKER = "[COMPRESSED_SUMMARY]"
+
+/** 自动压缩的目标 token（四章全部内容合计）与保留的最近原文条数 */
+private const val AUTO_COMPRESS_TARGET_TOKENS = 3000
+private const val AUTO_COMPRESS_KEEP_RECENT = 32
+
+/** 单次压缩调用的输入上限（字符）：原来按"每块 256 条"切，单块可达 51 万字符，直接撑爆压缩模型上下文 */
+private const val MAX_COMPRESS_INPUT_CHARS = 40_000
+private const val MIN_CHUNK_BUDGET_TOKENS = 300
+private const val MIN_RETRY_SPLIT_CHARS = 2_000
+
+/** 超出目标这个比例就触发二次压缩 */
+private const val BUDGET_SLACK = 0.25
+
+/**
+ * 预算硬约束，拼在用户提示词之前。
+ * 用来兜住"长度不限 / 宁多不漏"这类写法——生成后还会用 estimateTokens 校验一次，不指望模型自觉。
+ */
+private val COMPRESS_BUDGET_CLAUSE = """
+【预算硬约束 · 与下方提示词冲突时以本节为准】
+1. 你的完整输出不得超过 {target_tokens} token；宁可粗，不可超。
+2. 超出时从最旧的内容开始变粗：逐条 → 合并成段 → 只留时代概述；近期细节最后才动。
+3. 你输出的是"合并后的完整记忆"：既有记忆允许被改写、合并、删减——这是设计，不是篡改原文。
+""".trimIndent()
+
+private fun UIMessage.isCompressedSummary(): Boolean =
+    role == MessageRole.USER && toText().orEmpty().startsWith(SUMMARY_MARKER)
+
+/** 粗略 token 估算：CJK 每字约 0.6 token，其余非空白每字符约 0.3 token。 */
+private fun estimateTokens(text: String): Int {
+    var cjk = 0
+    var other = 0
+    text.forEach { ch ->
+        if (ch.isWhitespace()) return@forEach
+        val code = ch.code
+        val isCjk = (code in 0x3000..0x303F) || (code in 0x3040..0x30FF) || (code in 0x4E00..0x9FFF) ||
+            (code in 0x3400..0x4DBF) || (code in 0xF900..0xFAFF) || (code in 0xFF00..0xFFEF)
+        if (isCjk) cjk++ else other++
+    }
+    return (cjk * 0.6 + other * 0.3).toInt()
+}
+
+/** 按字符预算切块（不是按条数） */
+private fun splitMessagesByChars(
+    messages: List<IndexedValue<UIMessage>>,
+    maxChars: Int,
+): List<List<IndexedValue<UIMessage>>> {
+    if (messages.isEmpty()) return listOf(emptyList())
+    val chunks = mutableListOf<List<IndexedValue<UIMessage>>>()
+    var current = mutableListOf<IndexedValue<UIMessage>>()
+    var currentChars = 0
+    messages.forEach { entry ->
+        val chars = entry.value.summaryAsText(maxLength = 2000).length + 12
+        if (current.isNotEmpty() && currentChars + chars > maxChars) {
+            chunks += current
+            current = mutableListOf()
+            currentChars = 0
+        }
+        current += entry
+        currentChars += chars
+    }
+    if (current.isNotEmpty()) chunks += current
+    return chunks
 }
