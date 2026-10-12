@@ -995,7 +995,9 @@ class ChatService(
         val roundBase = conversation.summaryCoveredCount.coerceAtLeast(0)
 
         // 只压缩非摘要消息，保留最近 N 条不压
-        val regularEntries = allMessages.withIndex().filterNot { it.value.isCompressedSummary() }
+        // index 取"普通消息序列内"的位置，配合 roundBase 才能让轮次号跨压缩连续
+        // （若取整表位置，折叠后表头多了一条摘要消息，编号会整体错位）
+        val regularEntries = allMessages.filterNot { it.isCompressedSummary() }.withIndex().toList()
         val messagesToCompress: List<IndexedValue<UIMessage>>
         val messagesToKeep: List<UIMessage>
         if (keepRecentMessages > 0 && regularEntries.size > keepRecentMessages) {
