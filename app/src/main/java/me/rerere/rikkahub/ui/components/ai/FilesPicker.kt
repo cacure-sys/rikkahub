@@ -54,6 +54,7 @@ import kotlinx.coroutines.Job
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.rikkahub.data.model.isCompressedSummary
+import me.rerere.hugeicons.stroke.ArrowTurnBackward
 import me.rerere.hugeicons.stroke.Voice
 import me.rerere.hugeicons.stroke.Camera01
 import me.rerere.hugeicons.stroke.Codesandbox
