@@ -298,7 +298,6 @@
   <string name="chat_page_compress_context_title">ضغط سجل المحادثة</string>
   <string name="chat_page_compress_keep_recent">الاحتفاظ بالرسائل الأخيرة</string>
   <string name="chat_page_compress_not_enough_messages">لا توجد رسائل كافية للضغط. قلّل عدد الرسائل المراد الاحتفاظ بها أو أضف المزيد من الرسائل.</string>
-  <string name="chat_page_compress_target_tokens">حجم Token المستهدف</string>
   <string name="chat_page_compress_warning">⚠️ سيؤدي ضغط السياق إلى إعادة تعيين جميع الرسائل في المحادثة الحالية</string>
   <string name="chat_page_compressing">جارٍ الضغط...</string>
   <string name="chat_page_conversation_system_prompt">مطالبة نظام المحادثة</string>
@@ -896,7 +895,7 @@
   <string name="setting_model_page_chat_model_desc">نموذج الدردشة الافتراضي العام</string>
   <string name="setting_model_page_compress_model">نموذج الضغط</string>
   <string name="setting_model_page_compress_model_desc">النموذج المستخدم لضغط سجل المحادثة</string>
-  <string name="setting_model_page_compress_prompt_vars">المتغيرات: {content}، {target_tokens}، {additional_context}</string>
+  <string name="setting_model_page_compress_prompt_vars">المتغيرات: {content}، {additional_context}</string>
   <string name="setting_model_page_enable_suggestion">تمكين اقتراحات الدردشة</string>
   <string name="setting_model_page_fast_model">النموذج السريع</string>
   <string name="setting_model_page_fast_model_desc">النموذج المستخدم للعناوين واقتراحات الدردشة والمهام السريعة أو الخلفية الأخرى</string>

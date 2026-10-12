@@ -38,12 +38,10 @@ fun CompressContextDialog(
     assistant: Assistant,
     onUpdateAssistant: (Assistant) -> Unit,
     onDismiss: () -> Unit,
-    onConfirm: (additionalPrompt: String, targetTokens: Int, keepRecentMessages: Int) -> Job
+    onConfirm: (additionalPrompt: String, keepRecentMessages: Int) -> Job
 ) {
     var additionalPrompt by remember { mutableStateOf("") }
-    var selectedTokens by remember { mutableIntStateOf(2000) }
     var keepRecentMessages by remember { mutableIntStateOf(32) }
-    val tokenOptions = listOf(500, 1000, 2000, 4000)
     var currentJob by remember { mutableStateOf<Job?>(null) }
     val isLoading = currentJob?.isActive == true
 
@@ -85,27 +83,9 @@ fun CompressContextDialog(
                 } else {
                     Text(stringResource(R.string.chat_page_compress_context_desc))
 
-                    // Token size selector
-                    Text(
-                        text = stringResource(R.string.chat_page_compress_target_tokens),
-                        style = MaterialTheme.typography.labelMedium
-                    )
-                    SingleChoiceSegmentedButtonRow(
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        tokenOptions.forEachIndexed { index, tokens ->
-                            SegmentedButton(
-                                selected = selectedTokens == tokens,
-                                onClick = { selectedTokens = tokens },
-                                shape = SegmentedButtonDefaults.itemShape(
-                                    index = index,
-                                    count = tokenOptions.size
-                                )
-                            ) {
-                                Text("$tokens")
-                            }
-                        }
-                    }
+                    // 这里原来有个"目标 token"选择器（500/1000/2000/4000）。
+                    // 已移除：代码早就不按它封顶了，留着只会让人以为压缩有长度上限。
+                    // 记忆多长，现在由压缩提示词自己的叙述纪律决定。
 
                     // Keep recent messages input
                     OutlinedNumberInput(
@@ -179,7 +159,7 @@ fun CompressContextDialog(
                 }
             } else {
                 TextButton(onClick = {
-                    currentJob = onConfirm(additionalPrompt, selectedTokens, keepRecentMessages)
+                    currentJob = onConfirm(additionalPrompt, keepRecentMessages)
                 }) {
                     Text(stringResource(R.string.confirm))
                 }

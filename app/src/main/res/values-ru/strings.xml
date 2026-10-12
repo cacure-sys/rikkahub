@@ -263,7 +263,6 @@
   <string name="chat_page_compress_context_title">Сжать историю чата</string>
   <string name="chat_page_compress_keep_recent">Сохранять недавние сообщения</string>
   <string name="chat_page_compress_not_enough_messages">Недостаточно сообщений для сжатия. Уменьшите количество сохраняемых сообщений или добавьте больше сообщений.</string>
-  <string name="chat_page_compress_target_tokens">Целевой размер токенов</string>
   <string name="chat_page_compress_warning">⚠️ Сжатие контекста приведёт к сбросу всех сообщений в текущем диалоге</string>
   <string name="chat_page_compressing">Сжатие...</string>
   <string name="chat_page_conversation_system_prompt">Системный запрос для беседы</string>
@@ -743,7 +742,7 @@
   <string name="setting_model_page_chat_model_desc">Глобальная модель чата по умолчанию</string>
   <string name="setting_model_page_compress_model">Сжать модель</string>
   <string name="setting_model_page_compress_model_desc">Модель для сжатия истории разговоров</string>
-  <string name="setting_model_page_compress_prompt_vars">Переменные: {content}, {target_tokens}, {additional_context}</string>
+  <string name="setting_model_page_compress_prompt_vars">Переменные: {content}, {additional_context}</string>
   <string name="setting_model_page_ocr_model">Модель OCR</string>
   <string name="setting_model_page_ocr_model_desc">Модель, используемая для оптического распознавания текста на изображениях</string>
   <string name="setting_model_page_ocr_prompt_vars">Переменные: Данные изображения: {images}</string>

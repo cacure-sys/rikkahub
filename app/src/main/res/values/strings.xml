@@ -265,7 +265,6 @@
   <string name="chat_page_compress_context_title">Compress Conversation History</string>
   <string name="chat_page_compress_keep_recent">Keep recent messages</string>
   <string name="chat_page_compress_not_enough_messages">Not enough messages to compress. Reduce the number of messages to keep or add more messages.</string>
-  <string name="chat_page_compress_target_tokens">Target Token Size</string>
   <string name="chat_page_compress_warning">⚠️ Compressing context will reset all messages in the current conversation</string>
   <string name="chat_page_compressing">Compressing...</string>
   <string name="chat_page_conversation_system_prompt">Conversation System Prompt</string>
@@ -794,7 +793,7 @@
   <string name="setting_model_page_fast_model">Fast Model</string>
   <string name="setting_model_page_fast_model_desc">Model used for titles, chat suggestions, and other fast or background tasks</string>
   <string name="setting_model_page_compress_model_desc">Model for compressing conversation history</string>
-  <string name="setting_model_page_compress_prompt_vars">Variables: {content}, {target_tokens}, {additional_context}</string>
+  <string name="setting_model_page_compress_prompt_vars">Variables: {content}, {additional_context}</string>
   <string name="setting_model_page_ocr_model">OCR Model</string>
   <string name="setting_model_page_ocr_model_desc">Model used for optical character recognition on images</string>
   <string name="setting_model_page_ocr_prompt_vars">Variables: Image data: {images}</string>

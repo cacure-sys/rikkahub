@@ -263,7 +263,6 @@
   <string name="chat_page_compress_context_title">会話履歴を圧縮</string>
   <string name="chat_page_compress_keep_recent">最近のメッセージを保持</string>
   <string name="chat_page_compress_not_enough_messages">圧縮するためのメッセージが不足しています。保持するメッセージ数を減らすか、メッセージを追加してください。</string>
-  <string name="chat_page_compress_target_tokens">ターゲットトークンサイズ</string>
   <string name="chat_page_compress_warning">⚠️ コンテキストを圧縮すると、現在の会話のすべてのメッセージがリセットされます</string>
   <string name="chat_page_compressing">圧縮中…</string>
   <string name="chat_page_conversation_system_prompt">会話システムプロンプト</string>
@@ -743,7 +742,7 @@
   <string name="setting_model_page_chat_model_desc">グローバルデフォルトチャットモデル</string>
   <string name="setting_model_page_compress_model">モデルを圧縮</string>
   <string name="setting_model_page_compress_model_desc">会話履歴を圧縮するモデル</string>
-  <string name="setting_model_page_compress_prompt_vars">変数: {content}, {target_tokens}, {additional_context}</string>
+  <string name="setting_model_page_compress_prompt_vars">変数: {content}, {additional_context}</string>
   <string name="setting_model_page_ocr_model">OCRモデル</string>
   <string name="setting_model_page_ocr_model_desc">画像の光学文字認識に使用されるモデル</string>
   <string name="setting_model_page_ocr_prompt_vars">変数: 画像データ: {images}</string>

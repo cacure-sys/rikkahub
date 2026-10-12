@@ -652,7 +652,6 @@ class ChatService(
                         conversationId = conversationId,
                         conversation = conversation,
                         additionalPrompt = "",
-                        targetTokens = AUTO_COMPRESS_TARGET_TOKENS,
                         keepRecentMessages = AUTO_COMPRESS_KEEP_RECENT,
                     ).onFailure {
                         // 以前这里只 printStackTrace：失败后会话保持全量，用户看到的就是"压缩了还是全量"
@@ -969,7 +968,6 @@ class ChatService(
         conversationId: Uuid,
         conversation: Conversation,
         additionalPrompt: String,
-        targetTokens: Int,
         keepRecentMessages: Int = 32,
     ): Result<Unit> = runCatching {
         val settings = settingsStore.settingsFlow.first()
@@ -1014,19 +1012,15 @@ class ChatService(
 
         // 按字符切块：原来按"每块 256 条"切，单块输入可达 256×2000 字符，极易撑爆压缩模型上下文
         val chunks = splitMessagesByChars(messagesToCompress, MAX_COMPRESS_INPUT_CHARS)
-        val perChunkBudget = (targetTokens / chunks.size).coerceAtLeast(MIN_CHUNK_BUDGET_TOKENS)
 
         // 一次生成：既有记忆 + 新内容 → 合并后的完整记忆（旧的允许被改写/合并/删减）
-        suspend fun generate(content: String, budgetTokens: Int, warning: String = ""): String {
-            val additional = buildString {
-                if (additionalPrompt.isNotBlank()) appendLine(additionalPrompt)
-                if (warning.isNotBlank()) appendLine(warning)
-            }.trim()
-            // 不再前置"预算硬约束"：长度交给提示词自己的叙述纪律（"篇幅以事件密度为准"）。
-            // 硬顶会把记忆碾成骨架，而丢掉的内容换不回来；现在防跑偏靠提示词纪律 + 归档可逆。
+        // 不传长度目标：篇幅交给提示词自己的叙述纪律（"以事件密度为准"）。
+        suspend fun generate(content: String): String {
+            val additional = additionalPrompt.trim()
+            // 没有"预算硬约束"、也没有 {target_tokens}：硬顶会把记忆碾成骨架，
+            // 而丢掉的内容换不回来；防跑偏靠提示词纪律 + 归档可逆。
             val prompt = settings.compressPrompt.applyPlaceholders(
                 "content" to content,
-                "target_tokens" to budgetTokens.toString(),
                 "additional_context" to additional,
                 "locale" to Locale.getDefault().displayName
             )
@@ -1063,21 +1057,21 @@ class ChatService(
             appendLine(newPart)
         }
 
-        // 分块并行；单块直接产出合并记忆，多块先出片段、最后合并一次（总量 ≈ target，不是 target × 块数）
+        // 分块并行；单块直接产出合并记忆，多块先出片段、最后合并一次
+        // （不再按块分配 token 预算：原设计是"每块 target/块数"，块一多就整体塌成骨架）
         val rawFragmentResults: List<String?> = coroutineScope {
             chunks.map { chunk ->
                 async {
                     val text = chunk.joinToString("\n\n") {
                         "[轮次 ${roundBase + it.index + 1}] ${it.value.summaryAsText(maxLength = 2000)}"
                     }
-                    val budget = if (chunks.size == 1) targetTokens else perChunkBudget
-                    runCatching { generate(contentWith(text), budget) }
+                    runCatching { generate(contentWith(text)) }
                         .recoverCatching { first ->
                             // 失败块拆半重试一次：避免"一块失败 → 整次压缩放弃 → 会话保持全量"
                             val half = text.length / 2
                             if (half < MIN_RETRY_SPLIT_CHARS) throw first
-                            generate(contentWith(text.take(half)), budget) + "\n\n" +
-                                generate(contentWith(text.substring(half)), budget)
+                            generate(contentWith(text.take(half))) + "\n\n" +
+                                generate(contentWith(text.substring(half)))
                         }
                         .getOrElse { error ->
                             // 仍失败：该块原文保留（宁可大，不可丢），绝不静默丢内容
@@ -1116,7 +1110,7 @@ class ChatService(
         val summary = if (chunks.size == 1) {
             fragments.first()
         } else {
-            generate(contentWith(fragments.joinToString("\n\n")), targetTokens)
+            generate(contentWith(fragments.joinToString("\n\n")))
         }
 
         // 整份输出再兜一次：宁可这次不压（原文继续发送、报错可见），也不要存下一句拒绝
@@ -1567,18 +1561,17 @@ class ChatService(
 
 private const val SUMMARY_MARKER = COMPRESSED_SUMMARY_MARKER
 
-/** 自动压缩的目标 token（四章全部内容合计）与保留的最近原文条数 */
-private const val AUTO_COMPRESS_TARGET_TOKENS = 3000
+/** 自动压缩保留的最近原文条数（这部分不压） */
 private const val AUTO_COMPRESS_KEEP_RECENT = 32
 
 /** 单次压缩调用的输入上限（字符）：原来按"每块 256 条"切，单块可达 51 万字符，直接撑爆压缩模型上下文 */
 private const val MAX_COMPRESS_INPUT_CHARS = 40_000
-private const val MIN_CHUNK_BUDGET_TOKENS = 300
 private const val MIN_RETRY_SPLIT_CHARS = 2_000
 
-// 注：这里曾有一个拼在用户提示词之前的"预算硬约束"段落（要求输出 ≤ {target_tokens} token，
-// 并在超出 25% 时触发二次压缩）。已按要求移除：长度改由提示词的叙述纪律控制。
-// {target_tokens} 变量照旧传入，供提示词自行取用。
+// 注：token 上限这条线整个拆掉了——既包括拼在提示词前的"预算硬约束"段落（要求输出 ≤ N token、
+// 超 25% 触发二次压缩），也包括按块分配的 per-chunk 预算、以及 {target_tokens} 变量本身。
+// 理由：上限在长会话里会把记忆碾成骨架，而丢掉的剧情换不回来。
+// 现在长度由提示词的叙述纪律决定，压坏了还有"恢复被压缩的原文"兜底（归档可逆）。
 
 /** 短于这个长度就不像一份记忆：判为失败，原文不归档 */
 private const val MIN_USABLE_SUMMARY_CHARS = 120
