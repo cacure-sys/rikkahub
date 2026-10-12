@@ -7,6 +7,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **不要在本地编译验证。** 本地 gradle wrapper 会尝试下载 `gradle-9.5.0-bin.zip`，但被本机 SSL 证书拦截（`PKIX path building failed`，`services.gradle.org` 证书验证失败），下载必失败。
 - 本项目通过 **推到 GitHub 用 Actions 编译** 来验证构建。改动写完后直接提交/推送，由 CI 跑编译与打包（release/debug APK）。
 - 本地只做静态检查（grep/读代码），不要运行 `./gradlew`。
+- **CI 绿了才算完。** 本地静态检查只能覆盖括号平衡 / 符号是否存在 / 符号的作用域链，
+  编译器的活只能交给 CI——这一点已经被打脸两次。
+- 踩过的坑都记在 `DEV-PITFALLS.md`（含两次"本地全绿但 CI 红"的具体根因、推送与取日志的正确姿势、
+  迁移与提示词里的雷、真机验证清单、以及 `_rescue/` 各救援工具的用途）。动手前先扫一遍。
 
 ## Project Overview
 
