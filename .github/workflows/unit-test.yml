@@ -1,0 +1,78 @@
+name: Unit Test
+
+# 只跑 JVM 单元测试，不打包 APK —— 用于给"图片切片/编码"这类纯逻辑改动一个红→绿的快速信号。
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: 'recursive'
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install pnpm
+        run: npm install -g pnpm
+
+      - name: Gradle cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+
+      - name: Install web dependencies
+        run: |
+          cd web-ui
+          pnpm install
+
+      - name: Generate debug keystore for release
+        run: |
+          keytool -genkey -v -keystore $HOME/debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+          echo "storeFile=$HOME/debug.keystore" >> local.properties
+          echo "storePassword=android" >> local.properties
+          echo "keyAlias=androiddebugkey" >> local.properties
+          echo "keyPassword=android" >> local.properties
+
+      # ai 模块的图片编码/切片逻辑：切片规划、data URL 前缀、魔数校验
+      # 只跑图片相关的三个测试类，避免被无关的既有测试拖成红灯
+      - name: Run ai module unit tests
+        run: |
+          chmod +x gradlew
+          ./gradlew :ai:testDebugUnitTest \
+            --tests "me.rerere.ai.util.ImageTilingPlanTest" \
+            --tests "me.rerere.ai.util.FileEncoderDataUrlTest" \
+            --tests "me.rerere.ai.util.FileEncoderExifTransformTest" \
+            --stacktrace
+
+      - name: Summarize results
+        if: always()
+        run: |
+          echo "=== 测试结果 ==="
+          grep -h -o 'name="[^"]*" tests="[0-9]*" skipped="[0-9]*" failures="[0-9]*" errors="[0-9]*"' \
+            ai/build/test-results/testDebugUnitTest/*.xml 2>/dev/null || echo "(没有测试结果文件)"
+
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-unit-test-report
+          path: ai/build/reports/tests/testDebugUnitTest
+          if-no-files-found: ignore

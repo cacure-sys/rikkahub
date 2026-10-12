@@ -10,6 +10,8 @@ import androidx.core.net.toUri
 import me.rerere.ai.ui.UIMessagePart
 import java.io.ByteArrayOutputStream
 import java.io.File
+import kotlin.io.encoding.Base64 as KotlinBase64
+import kotlin.io.encoding.ExperimentalEncodingApi
 
 private val supportedTypes = setOf(
     "image/jpeg",
@@ -49,18 +51,32 @@ internal fun mapExifOrientationToTransform(orientation: Int): ExifTransformType 
     else -> ExifTransformType.NONE
 }
 
-fun UIMessagePart.Image.encodeBase64(withPrefix: Boolean = true): Result<EncodedImage> = runCatching {
+/**
+ * 把图片编码成服务商要的形式。
+ *
+ * @param withPrefix true 返回完整 data URL（OpenAI 兼容的 image_url.url 用），
+ *                   false 只返回纯 base64 内容（Anthropic 的 source.data / Google 的 inlineData.data 用）。
+ * @param maxSide 单边像素上限，超过就降采样。默认取服务商里最严的档位（DeepSeek 8192），
+ *                由 [ImageTilingPolicy] 决定；超长图会先被切片，所以这里不会把长截图压糊。
+ */
+fun UIMessagePart.Image.encodeBase64(
+    withPrefix: Boolean = true,
+    maxSide: Int = ImageTilingPolicy.DEFAULT_MAX_SIDE,
+): Result<EncodedImage> = runCatching {
     when {
-        this.url.startsWith("file://") -> {
-            val filePath =
+        this.url.startsWith("file://") || this.url.startsWith("/") -> {
+            val filePath = if (this.url.startsWith("file://")) {
                 this.url.toUri().path ?: throw IllegalArgumentException("Invalid file URI: ${this.url}")
+            } else {
+                this.url
+            }
             val file = File(filePath)
             if (!file.exists()) {
                 throw IllegalArgumentException("File does not exist: ${this.url}")
             }
             val mimeType = file.guessMimeType().getOrThrow()
             // 统一进行压缩处理
-            val (encoded, outputMimeType) = file.compressAndEncode(mimeType)
+            val (encoded, outputMimeType) = file.compressAndEncode(mimeType, maxDimension = maxSide)
             EncodedImage(
                 base64 = if (withPrefix) "data:$outputMimeType;base64,$encoded" else encoded,
                 mimeType = outputMimeType
@@ -68,16 +84,69 @@ fun UIMessagePart.Image.encodeBase64(withPrefix: Boolean = true): Result<Encoded
         }
 
         this.url.startsWith("data:") -> {
-            // 从 data URL 提取 mime type
-            val mimeType = url.substringAfter("data:").substringBefore(";")
-            EncodedImage(base64 = url, mimeType = mimeType)
+            val header = this.url.substringAfter("data:").substringBefore(",")
+            val payload = this.url.substringAfter(",", "")
+            val declared = header.substringBefore(";").trim().lowercase().ifBlank { "image/png" }
+            if (payload.isBlank()) {
+                throw IllegalArgumentException("Empty data URL payload")
+            }
+            // 发送前按真实字节判格式：非法 payload 宁可让上层用占位文本，也不要发给服务商换一个看不懂的报错
+            val sniffed = sniffDataUrlImageMimeType(payload)
+                ?: throw IllegalArgumentException("data URL payload is not a supported image")
+            EncodedImage(
+                // 修 bug：原先无视 withPrefix，把整个 data URL 当成 base64 返回，
+                // 于是 Anthropic 的 source.data / Google 的 inlineData.data 里被塞进了
+                // "data:image/png;base64," 前缀 → 服务商判为非法图片（"unsupported image"）。
+                base64 = if (withPrefix) this.url else payload,
+                mimeType = sniffed.ifBlank { declared },
+            )
         }
+
         this.url.startsWith("http") -> {
-            // HTTP URL 无法确定 mime type，默认使用 image/png
-            EncodedImage(base64 = url, mimeType = "image/png")
+            // 远程 URL 无法确定 mime type，默认使用 image/png。
+            // 只有接受 URL 的调用方（OpenAI 兼容的 image_url.url）可以用：需要纯 base64 的
+            // 调用方必须先把图下载下来，否则宁可失败让上层用占位文本，
+            // 也不能把 URL 字符串当 base64 发出去（同样会被判为非法图片）。
+            if (withPrefix) {
+                EncodedImage(base64 = url, mimeType = "image/png")
+            } else {
+                throw IllegalArgumentException("Remote image must be downloaded before inlining: $url")
+            }
         }
+
         else -> throw IllegalArgumentException("Unsupported URL format: $url")
     }
+}
+
+private val PNG_SIGNATURE = byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A)
+
+/**
+ * 只靠前若干字节判断真实图片格式。
+ * 解 base64 的前 12 个字符就够（9 字节），不必为了校验把整张图解一遍。
+ */
+@OptIn(ExperimentalEncodingApi::class)
+internal fun sniffDataUrlImageMimeType(payload: String): String? {
+    val head = payload.filterNot { it.isWhitespace() }.take(12)
+    if (head.length < 4) return null
+    val bytes = runCatching { KotlinBase64.decode(head) }.getOrNull() ?: return null
+    return sniffImageMimeType(bytes)
+}
+
+/** 按魔数判断图片格式，认不出返回 null。 */
+internal fun sniffImageMimeType(bytes: ByteArray): String? = when {
+    bytes.size >= 3 && bytes[0] == 0xFF.toByte() && bytes[1] == 0xD8.toByte() && bytes[2] == 0xFF.toByte() ->
+        "image/jpeg"
+
+    bytes.size >= 8 && bytes.copyOfRange(0, 8).contentEquals(PNG_SIGNATURE) -> "image/png"
+
+    bytes.size >= 12 &&
+            bytes.copyOfRange(0, 4).toString(Charsets.US_ASCII) == "RIFF" &&
+            bytes.copyOfRange(8, 12).toString(Charsets.US_ASCII) == "WEBP" -> "image/webp"
+
+    bytes.size >= 6 && bytes.copyOfRange(0, 6).toString(Charsets.US_ASCII) in setOf("GIF89a", "GIF87a") ->
+        "image/gif"
+
+    else -> null
 }
 
 fun UIMessagePart.Video.encodeBase64(withPrefix: Boolean = true): Result<String> = runCatching {
@@ -116,20 +185,24 @@ fun UIMessagePart.Audio.encodeBase64(withPrefix: Boolean = true): Result<String>
 
 private fun File.compressAndEncode(
     mimeType: String,
-    maxDimension: Int = 10_000,
+    maxDimension: Int = ImageTilingPolicy.DEFAULT_MAX_SIDE,
     maxPixels: Long = 16_000_000L,
     quality: Int = 85
 ): Pair<String, String> {
-    // GIF 保持原样（可能是动图）
-    if (mimeType == "image/gif") {
-        return Pair(encodeToBase64Streaming(), mimeType)
-    }
-
     // 读取图片尺寸
     val options = BitmapFactory.Options().apply {
         inJustDecodeBounds = true
     }
     BitmapFactory.decodeFile(absolutePath, options)
+
+    // GIF 保持原样（可能是动图）；但超过单边上限时必须落到下面的静态图路径，
+    // 否则会被服务商的单边像素上限拒绝。
+    if (mimeType == "image/gif" &&
+        options.outWidth in 1..maxDimension &&
+        options.outHeight in 1..maxDimension
+    ) {
+        return Pair(encodeToBase64Streaming(), mimeType)
+    }
 
     options.inSampleSize = calculateImageInSampleSize(
         width = options.outWidth,
