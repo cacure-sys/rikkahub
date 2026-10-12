@@ -185,9 +185,14 @@ fun ChatList(
     }
 }
 
-/** 归档区块的提示胶囊：说明这里开始的内容不发送给模型，并给一个就地的恢复入口。 */
+/** 归档区块的提示胶囊：这里开始的内容不发送给模型，可展开看原文，也可就地恢复。 */
 @Composable
-private fun ArchivedHint(count: Int, onRestore: (() -> Unit)?) {
+private fun ArchivedHint(
+    count: Int,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    onRestore: (() -> Unit)?,
+) {
     Surface(
         shape = CircleShape,
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
@@ -202,6 +207,15 @@ private fun ArchivedHint(count: Int, onRestore: (() -> Unit)?) {
                 text = "已归档 $count 条 · 不发送给模型",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                text = if (expanded) "收起" else "展开",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier
+                    .clip(CircleShape)
+                    .clickable { onToggle() }
+                    .padding(horizontal = 6.dp, vertical = 2.dp),
             )
             if (onRestore != null) {
                 Text(
@@ -306,6 +320,10 @@ private fun ChatListNormal(
             .associateBy { it.id }
     }
     val lastMessageIndex = conversation.messageNodes.lastIndex
+    // 归档原文的展开/收起：默认收起——压缩之后聊天流不该再铺满原文。
+    // 按会话 id 记住状态，切会话回到默认收起。
+    var archivedExpanded by rememberSaveable(conversation.id) { mutableStateOf(false) }
+    val archivedCount = conversation.messageNodes.count { it.archived }
 
     Box(
         modifier = Modifier
@@ -353,14 +371,29 @@ private fun ChatListNormal(
                 items = conversation.messageNodes,
                 key = { index, item -> item.id },
             ) { index, node ->
+                val isArchivedBlockStart =
+                    node.archived && (index == 0 || !conversation.messageNodes[index - 1].archived)
+                // 收起时，非首条的归档消息在组合之前就早退。
+                // 不能只在 Column 里面 return：那样每个被跳过的 item 仍会留下一个空 Column，
+                // 而 LazyColumn 的 verticalArrangement(12.dp) 会逐条攒出几百 dp 的空白。
+                if (node.archived && !archivedExpanded && !isArchivedBlockStart) {
+                    return@itemsIndexed
+                }
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    // 归档区块：以下原文留存本地、不发送给模型。一个小胶囊替代原来那行说教文字
-                    if (node.archived && (index == 0 || !conversation.messageNodes[index - 1].archived)) {
+                    // 归档区块开头的小胶囊：不发送给模型 / 展开-收起 / 就地恢复
+                    if (isArchivedBlockStart) {
                         ArchivedHint(
-                            count = conversation.messageNodes.count { it.archived },
+                            count = archivedCount,
+                            expanded = archivedExpanded,
+                            onToggle = { archivedExpanded = !archivedExpanded },
                             onRestore = onRestoreCompressed,
                         )
                     }
+                    if (node.archived && !archivedExpanded) {
+                        // 首条归档消息本身在收起时也不显示——胶囊已经代表整段了。
+                        // 用 if/else 而不是 return：Column 的 content 不是 inline，
+                        // 在里面写 return@itemsIndexed 编译不过。
+                    } else {
                     ListSelectableItem(
                         key = node.id,
                         onSelectChange = {
@@ -415,6 +448,7 @@ private fun ChatListNormal(
                             onToolAnswer = onToolAnswer,
                             lastMessage = index == lastMessageIndex,
                         )
+                    }
                     }
                 }
             }
