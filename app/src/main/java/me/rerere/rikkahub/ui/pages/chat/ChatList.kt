@@ -45,6 +45,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.FilledIconButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.HorizontalFloatingToolbar
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -316,7 +317,19 @@ private fun ChatListNormal(
                 items = conversation.messageNodes,
                 key = { index, item -> item.id },
             ) { index, node ->
-                Column {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    // 归档区块：以下原文保留在库里（可展开、可一键恢复），但不再发送给模型
+                    if (node.archived && (index == 0 || !conversation.messageNodes[index - 1].archived)) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(
+                                text = "以下 ${conversation.messageNodes.count { it.archived }} 条已归档：" +
+                                    "原文保留在本地（不发送给模型），可在输入栏菜单里一键恢复",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            HorizontalDivider(modifier = Modifier.padding(top = 4.dp))
+                        }
+                    }
                     ListSelectableItem(
                         key = node.id,
                         onSelectChange = {

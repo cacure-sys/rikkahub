@@ -57,6 +57,8 @@ import me.rerere.rikkahub.data.ai.transformers.PromptInjectionTransformer
 import me.rerere.rikkahub.data.ai.transformers.RegexOutputTransformer
 import me.rerere.rikkahub.data.ai.transformers.TemplateTransformer
 import me.rerere.rikkahub.data.ai.transformers.ThinkTagTransformer
+import me.rerere.rikkahub.data.model.COMPRESSED_SUMMARY_MARKER
+import me.rerere.rikkahub.data.model.isCompressedSummary
 import me.rerere.rikkahub.data.ai.transformers.TimeReminderTransformer
 import me.rerere.rikkahub.data.ai.transformers.WorkspaceReminderTransformer
 import me.rerere.rikkahub.data.event.AppEvent
@@ -1563,7 +1565,7 @@ class ChatService(
 
 // ---- 压缩（工作内存）相关：文件级常量与工具 ----
 
-private const val SUMMARY_MARKER = "[COMPRESSED_SUMMARY]"
+private const val SUMMARY_MARKER = COMPRESSED_SUMMARY_MARKER
 
 /** 自动压缩的目标 token（四章全部内容合计）与保留的最近原文条数 */
 private const val AUTO_COMPRESS_TARGET_TOKENS = 3000
@@ -1605,9 +1607,6 @@ private fun looksLikeRefusal(text: String): Boolean {
     if (t.length < MIN_USABLE_SUMMARY_CHARS) return true
     return t.length < REFUSAL_SCAN_MAX_CHARS && REFUSAL_PATTERN.containsMatchIn(t)
 }
-
-private fun UIMessage.isCompressedSummary(): Boolean =
-    role == MessageRole.USER && toText().orEmpty().startsWith(SUMMARY_MARKER)
 
 /** 粗略 token 估算：CJK 每字约 0.6 token，其余非空白每字符约 0.3 token。 */
 private fun estimateTokens(text: String): Int {

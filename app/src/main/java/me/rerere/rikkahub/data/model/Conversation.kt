@@ -144,6 +144,18 @@ fun UIMessage.toMessageNode(): MessageNode {
     )
 }
 
+/** 压缩记忆消息的前缀标记：带这个前缀的消息是"记忆"，不是用户或角色的真实发言。 */
+const val COMPRESSED_SUMMARY_MARKER = "[COMPRESSED_SUMMARY]"
+
+/**
+ * 是不是一条压缩记忆消息。
+ *
+ * 只看前缀、不判 role：这个标记是本 fork 自己写入的，用户不可能碰巧打出来；
+ * 少一个 role 判断，data 层就不必依赖 MessageRole。
+ */
+fun UIMessage.isCompressedSummary(): Boolean =
+    toText().orEmpty().startsWith(COMPRESSED_SUMMARY_MARKER)
+
 /** 本地附件引用，包含工具结果中的嵌套附件。 */
 internal fun List<UIMessagePart>.localFileUrls(): Set<String> = buildSet {
     this@localFileUrls.forEach { part ->
