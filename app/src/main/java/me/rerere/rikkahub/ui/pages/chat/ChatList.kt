@@ -9,6 +9,8 @@ import me.rerere.hugeicons.stroke.ArrowUpDouble
 import me.rerere.hugeicons.stroke.CursorPointer01
 import me.rerere.hugeicons.stroke.Search01
 import me.rerere.hugeicons.stroke.Cancel01
+import me.rerere.hugeicons.stroke.Delete01
+import me.rerere.hugeicons.stroke.Package
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.AnimatedVisibilityScope
@@ -128,6 +130,8 @@ fun ChatList(
     onForkMessage: (UIMessage) -> Unit = {},
     onDelete: (UIMessage) -> Unit = {},
     onRestoreCompressed: (() -> Unit)? = null,
+    onArchiveMessages: ((List<MessageNode>) -> Unit)? = null,
+    onDeleteMessages: ((List<MessageNode>) -> Unit)? = null,
     onUpdateMessage: (MessageNode) -> Unit = {},
     onClickSuggestion: (String) -> Unit = {},
     onTranslate: ((UIMessage, java.util.Locale) -> Unit)? = null,
@@ -171,6 +175,8 @@ fun ChatList(
                 onForkMessage = onForkMessage,
                 onDelete = onDelete,
                 onRestoreCompressed = onRestoreCompressed,
+                onArchiveMessages = onArchiveMessages,
+                onDeleteMessages = onDeleteMessages,
                 onUpdateMessage = onUpdateMessage,
                 onClickSuggestion = onClickSuggestion,
                 onTranslate = onTranslate,
@@ -249,6 +255,8 @@ private fun ChatListNormal(
     onForkMessage: (UIMessage) -> Unit,
     onDelete: (UIMessage) -> Unit,
     onRestoreCompressed: (() -> Unit)? = null,
+    onArchiveMessages: ((List<MessageNode>) -> Unit)? = null,
+    onDeleteMessages: ((List<MessageNode>) -> Unit)? = null,
     onUpdateMessage: (MessageNode) -> Unit,
     onClickSuggestion: (String) -> Unit,
     onTranslate: ((UIMessage, java.util.Locale) -> Unit)?,
@@ -556,6 +564,44 @@ private fun ChatListNormal(
                             }
                         ) {
                             Icon(HugeIcons.CursorPointer01, null)
+                        }
+                    }
+                    if (onArchiveMessages != null) {
+                        Tooltip(
+                            tooltip = {
+                                Text("归档选中（不再发送给模型）")
+                            }
+                        ) {
+                            IconButton(
+                                enabled = selectedItems.isNotEmpty(),
+                                onClick = {
+                                    val nodes = conversation.messageNodes.filter { it.id in selectedItems }
+                                    selecting = false
+                                    selectedItems.clear()
+                                    onArchiveMessages.invoke(nodes)
+                                }
+                            ) {
+                                Icon(HugeIcons.Package, null)
+                            }
+                        }
+                    }
+                    if (onDeleteMessages != null) {
+                        Tooltip(
+                            tooltip = {
+                                Text("删除选中")
+                            }
+                        ) {
+                            IconButton(
+                                enabled = selectedItems.isNotEmpty(),
+                                onClick = {
+                                    val nodes = conversation.messageNodes.filter { it.id in selectedItems }
+                                    selecting = false
+                                    selectedItems.clear()
+                                    onDeleteMessages.invoke(nodes)
+                                }
+                            ) {
+                                Icon(HugeIcons.Delete01, null)
+                            }
                         }
                     }
                     Tooltip(

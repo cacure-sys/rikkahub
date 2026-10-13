@@ -248,6 +248,14 @@ class ChatVM(
         }
     }
 
+    /** 批量删除：交给 service 一次落库，避免逐条删除时每条都触发一次保存与索引重建。 */
+    fun deleteMessages(messages: List<UIMessage>) {
+        if (messages.isEmpty()) return
+        viewModelScope.launch {
+            chatService.deleteMessages(_conversationId, messages.map { it.id }.toSet())
+        }
+    }
+
     fun showDeleteBlockedWhileGeneratingError() {
         chatService.addError(
             error = IllegalStateException("请先停止生成再删除消息"),

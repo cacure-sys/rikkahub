@@ -1477,6 +1477,24 @@ class ChatService(
         deleteMessage(conversationId, message.id, failIfMissing = false)
     }
 
+    /** 批量删除多条消息：在内存里连续重建，最后只落库一次。 */
+    suspend fun deleteMessages(
+        conversationId: Uuid,
+        messageIds: Set<Uuid>,
+    ) {
+        if (messageIds.isEmpty()) return
+        var current = getConversationFlow(conversationId).value
+        var changed = false
+        for (messageId in messageIds) {
+            val next = buildConversationAfterMessageDelete(current, messageId) ?: continue
+            current = next
+            changed = true
+        }
+        if (changed) {
+            saveConversation(conversationId, current)
+        }
+    }
+
     private fun buildConversationAfterMessageDelete(
         conversation: Conversation,
         messageId: Uuid,

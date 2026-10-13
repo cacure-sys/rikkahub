@@ -69,6 +69,7 @@ import me.rerere.rikkahub.data.datastore.getSelectedASRProvider
 import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.data.model.Conversation
+import me.rerere.rikkahub.data.model.MessageNode
 import me.rerere.rikkahub.data.repository.WorkspaceRepository
 import me.rerere.rikkahub.service.ChatError
 import me.rerere.rikkahub.ui.components.ai.ChatAttachmentPickerActions
@@ -284,6 +285,8 @@ private fun ChatPageContent(
     val toaster = LocalToaster.current
     // 撤销压缩的确认弹窗状态（与压缩对话框同一个作用域，ChatList 就在下方）
     var showRestoreConfirm by remember { mutableStateOf(false) }
+    // 批量删除：待确认的目标（非空 = 弹确认框）
+    var bulkDeleteTargets by remember { mutableStateOf(emptyList<MessageNode>()) }
     val workspaceRepository: WorkspaceRepository = koinInject()
     var previewMode by rememberSaveable { mutableStateOf(false) }
     val hazeState = rememberHazeState()
@@ -521,12 +524,64 @@ private fun ChatPageContent(
                 },
                 // 撤销压缩：入口挂在"记忆消息"上（看到坏了就地修），点了先弹确认
                 onRestoreCompressed = { showRestoreConfirm = true },
+                onArchiveMessages = { nodes ->
+                    // 全选归档 = 模型一条上下文都拿不到，拦下来
+                    if (nodes.size >= conversation.messageNodes.size) {
+                        toaster.show(
+                            message = "不能把整段对话全部归档——那样模型就没有任何上下文了",
+                            type = ToastType.Warning,
+                        )
+                    } else {
+                        val ids = nodes.map { it.id }.toSet()
+                        vm.updateConversation(
+                            conversation.copy(
+                                messageNodes = conversation.messageNodes.map { node ->
+                                    if (node.id in ids) node.copy(archived = true) else node
+                                }
+                            )
+                        )
+                        vm.saveConversationAsync()
+                        toaster.show(
+                            message = "已归档 ${ids.size} 条 · 不再发送给模型",
+                            type = ToastType.Success,
+                        )
+                    }
+                },
+                onDeleteMessages = { nodes ->
+                    if (loadingJob != null) {
+                        // 和单条删除同一条规则：生成中不许删
+                        vm.showDeleteBlockedWhileGeneratingError()
+                    } else {
+                        bulkDeleteTargets = nodes
+                    }
+                },
                 onConversationSystemPromptChange = { newPrompt ->
                     vm.updateConversation(conversation.copy(customSystemPrompt = newPrompt))
                     vm.saveConversationAsync()
                 },
             )
         }
+
+        // 批量删除：不可逆，必须确认（归档可逆，删除不可逆）
+        RikkaConfirmDialog(
+            show = bulkDeleteTargets.isNotEmpty(),
+            title = "删除 ${bulkDeleteTargets.size} 条消息",
+            text = {
+                Text("这些消息会从数据库里永久删除，找不回来。归档是可逆的，删除不是。")
+            },
+            confirmText = "删除",
+            dismissText = "取消",
+            onConfirm = {
+                val targets = bulkDeleteTargets
+                bulkDeleteTargets = emptyList()
+                vm.deleteMessages(targets.map { it.currentMessage })
+                toaster.show(
+                    message = "已删除 ${targets.size} 条消息",
+                    type = ToastType.Success,
+                )
+            },
+            onDismiss = { bulkDeleteTargets = emptyList() },
+        )
 
         // 撤销压缩：先确认再动手。原文回来是可逆方向，但那份记忆是被丢弃的、找不回
         RikkaConfirmDialog(
