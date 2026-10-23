@@ -7,11 +7,9 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Matrix
 import android.net.Uri
+import android.util.Base64
 import androidx.exifinterface.media.ExifInterface
 import java.io.File
-import com.drew.imaging.ImageMetadataReader
-import com.drew.imaging.png.PngChunkType
-import com.drew.metadata.png.PngDirectory
 import com.google.zxing.BinaryBitmap
 import com.google.zxing.MultiFormatReader
 import com.google.zxing.RGBLuminanceSource
@@ -294,25 +292,145 @@ object ImageUtils {
     /**
      * 获取酒馆角色卡中的角色元数据（如果存在）
      *
+     * 与 SillyTavern 的 `src/character-card-parser.js` 对齐，要点：
+     * 1. **优先级** `ccv3` > `chara` —— ST 写卡时会同时写两个 tEXt，v3 优先；
+     * 2. **按 keyword\0text 拆**，不做正则、不依赖 metadata-extractor 的
+     *    `[keyword: text]` 拼装格式（那是库自己拼的字符串，格式随版本变）；
+     * 3. 支持 `tEXt` / `iTXt`（UTF-8，部分工具用它导出），`zTXt` 压缩内容不展开。
+     *
+     * 旧实现只认 `tEXt` + `[chara:` 前缀 + 正则抓取，遇到 ccv3、iTXt 或
+     * 库版本变化就会失败，且拿不到 v3 独有字段。
+     *
      * @param context Android上下文
      * @param uri 图片URI
-     * @return Result<String> 包含角色元数据的Result对象
+     * @return Result<String> base64 编码的角色卡 JSON
      */
     fun getTavernCharacterMeta(context: Context, uri: Uri): Result<String> = runCatching {
-        val metadata = context.contentResolver.openInputStream(uri)?.use { ImageMetadataReader.readMetadata(it) }
-        if (metadata == null) error("Metadata is null, please check if the image is a character card")
-        if (!metadata.containsDirectoryOfType(PngDirectory::class.java)) error("No PNG directory found, please check if the image is a character card")
+        val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+            ?: error("Cannot open the image, please check if the file is readable")
 
-        val pngDirectory = metadata.getDirectoriesOfType(PngDirectory::class.java)
-            .firstOrNull { directory ->
-                directory.pngChunkType == PngChunkType.tEXt
-                    && directory.getString(PngDirectory.TAG_TEXTUAL_DATA).startsWith("[chara:")
-            } ?: error("No tEXt chunk found, please check if the image is a character card")
+        val entries = readPngTextEntries(bytes)
+        if (entries.isEmpty()) {
+            error("No text chunk found in this PNG, please check if it is a character card")
+        }
 
-        val value = pngDirectory.getString(PngDirectory.TAG_TEXTUAL_DATA)
+        // 与 ST 一致：ccv3 优先，其次 chara；keyword 大小写不敏感
+        val payload = entries.firstOrNull { it.keyword.equals("ccv3", ignoreCase = true) }
+            ?: entries.firstOrNull { it.keyword.equals("chara", ignoreCase = true) }
+            ?: error("No 'chara'/'ccv3' chunk found, please check if it is a character card")
 
-        val regex = Regex("""\[chara:\s*(.+?)]""")
-        return Result.success(regex.find(value)?.groupValues?.get(1) ?: error("No character data found"))
+        val decoded = decodeCardPayload(payload.text)
+        // 解出来的必须是 JSON 对象，否则说明这张卡不是标准格式
+        decoded.trim().let { text ->
+            require(text.startsWith("{")) { "Character data is not a JSON object" }
+        }
+        decoded
+    }
+
+    /** 一张 PNG 里的文本 chunk */
+    private data class PngTextEntry(val keyword: String, val text: String)
+
+    /**
+     * 遍历 PNG chunk，取出所有 tEXt / iTXt 的 (keyword, text)。
+     *
+     * PNG 结构：8 字节魔数 + 若干 `[len(4B BE)][type(4B)][data(len)][crc(4B)]`。
+     * 这里只读 type 与 data，不校验 CRC（角色卡不是安全边界，且省一次全量计算）。
+     */
+    private fun readPngTextEntries(bytes: ByteArray): List<PngTextEntry> {
+        val signature = byteArrayOf(
+            0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A
+        )
+        if (bytes.size < signature.size) return emptyList()
+        for (i in signature.indices) {
+            if (bytes[i] != signature[i]) return emptyList()
+        }
+
+        val out = mutableListOf<PngTextEntry>()
+        var idx = signature.size
+        while (idx + 8 <= bytes.size) {
+            val length = readUInt32(bytes, idx)
+            if (length < 0 || idx + 12L + length > bytes.size) break
+            val type = String(bytes, idx + 4, 4, Charsets.US_ASCII)
+            val dataStart = idx + 8
+            val dataLen = length.toInt()
+
+            when (type) {
+                "tEXt" -> parseKeywordText(bytes, dataStart, dataLen)?.let(out::add)
+                "iTXt" -> parseInternationalText(bytes, dataStart, dataLen)?.let(out::add)
+                // zTXt 是 zlib 压缩的 Latin-1；角色卡不用它，遇到直接跳过
+                "IEND" -> return out
+            }
+            idx = dataStart + dataLen + 4 // 跳过 CRC
+        }
+        return out
+    }
+
+    private fun readUInt32(bytes: ByteArray, offset: Int): Long {
+        return ((bytes[offset].toLong() and 0xFF) shl 24) or
+            ((bytes[offset + 1].toLong() and 0xFF) shl 16) or
+            ((bytes[offset + 2].toLong() and 0xFF) shl 8) or
+            (bytes[offset + 3].toLong() and 0xFF)
+    }
+
+    /** tEXt: keyword \0 text（都是 Latin-1，实际都是 ASCII） */
+    private fun parseKeywordText(bytes: ByteArray, start: Int, len: Int): PngTextEntry? {
+        val end = start + len
+        var sep = -1
+        for (i in start until end) {
+            if (bytes[i] == 0.toByte()) {
+                sep = i
+                break
+            }
+        }
+        if (sep < 0) return null
+        val keyword = String(bytes, start, sep - start, Charsets.ISO_8859_1)
+        val text = String(bytes, sep + 1, end - sep - 1, Charsets.ISO_8859_1)
+        return PngTextEntry(keyword, text)
+    }
+
+    /** iTXt: keyword \0 compressionFlag compressionMethod languageTag \0 translatedKeyword \0 text */
+    private fun parseInternationalText(bytes: ByteArray, start: Int, len: Int): PngTextEntry? {
+        val end = start + len
+        var sep = -1
+        for (i in start until end) {
+            if (bytes[i] == 0.toByte()) {
+                sep = i
+                break
+            }
+        }
+        if (sep < 0 || sep + 2 >= end) return null
+        val keyword = String(bytes, start, sep - start, Charsets.ISO_8859_1)
+        val compressionFlag = bytes[sep + 1].toInt()
+        // 压缩过的 iTXt（flag=1）这里不展开：角色卡不会这么写
+        if (compressionFlag != 0) return null
+
+        // 跳过 compressionMethod(1B) 后是两个 \0 结尾的字段，剩下的才是正文
+        var cursor = sep + 3
+        // languageTag
+        while (cursor < end && bytes[cursor] != 0.toByte()) cursor++
+        cursor++
+        // translatedKeyword
+        while (cursor < end && bytes[cursor] != 0.toByte()) cursor++
+        cursor++
+        if (cursor >= end) return null
+
+        val text = String(bytes, cursor, end - cursor, Charsets.UTF_8)
+        return PngTextEntry(keyword, text)
+    }
+
+    /**
+     * 把 chunk 里的内容解成 JSON 字符串。
+     *
+     * 标准卡是 base64；但有人手工塞过明文 JSON，两种都接。
+     */
+    private fun decodeCardPayload(raw: String): String {
+        val trimmed = raw.trim()
+        if (trimmed.startsWith("{")) return trimmed
+        return try {
+            String(Base64.decode(trimmed, Base64.DEFAULT), Charsets.UTF_8)
+        } catch (e: IllegalArgumentException) {
+            error("Character data is neither base64 nor JSON")
+        }
     }
 
     data class ImageInfo(

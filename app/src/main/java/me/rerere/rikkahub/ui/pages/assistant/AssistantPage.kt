@@ -231,7 +231,7 @@ fun AssistantPage(vm: AssistantVM = koinViewModel()) {
         }
     }
 
-    AssistantCreationSheet(createState)
+    AssistantCreationSheet(createState, vm)
 
     RikkaConfirmDialog(
         show = deleteTarget != null,
@@ -331,6 +331,7 @@ private fun AssistantTagsFilterRow(
 @Composable
 private fun AssistantCreationSheet(
     state: EditState<Assistant>,
+    vm: AssistantVM,
 ) {
     state.EditStateContent { assistant, update ->
         ModalBottomSheet(
@@ -369,8 +370,24 @@ private fun AssistantCreationSheet(
                     }
 
                     AssistantImporter(
-                        onUpdate = {
-                            update(it)
+                        onUpdate = { imported ->
+                            // 卡里内嵌的 character_book 要落到全局 Lorebook 库，并把 id 绑到助手。
+                            // 不绑定的话世界书不参与触发，导入后角色像个失忆的人
+                            // （DM 卡 19 条、星铁卡 7 条设定全在 character_book 里）。
+                            val lorebook = imported.lorebook
+                            if (lorebook != null) {
+                                val latest = vm.settings.value
+                                vm.updateSettings(
+                                    latest.copy(lorebooks = latest.lorebooks + lorebook)
+                                )
+                                update(
+                                    imported.assistant.copy(
+                                        lorebookIds = imported.assistant.lorebookIds + lorebook.id
+                                    )
+                                )
+                            } else {
+                                update(imported.assistant)
+                            }
                             state.confirm()
                         },
                         modifier = Modifier.fillMaxWidth(),
