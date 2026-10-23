@@ -4,11 +4,71 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 编译流程（重要）
 
-- **不要在本地编译验证。** 本地 gradle wrapper 会尝试下载 `gradle-9.5.0-bin.zip`，但被本机 SSL 证书拦截（`PKIX path building failed`，`services.gradle.org` 证书验证失败），下载必失败。
-- 本项目通过 **推到 GitHub 用 Actions 编译** 来验证构建。改动写完后直接提交/推送，由 CI 跑编译与打包（release/debug APK）。
-- 本地只做静态检查（grep/读代码），不要运行 `./gradlew`。
-- **CI 绿了才算完。** 本地静态检查只能覆盖括号平衡 / 符号是否存在 / 符号的作用域链，
-  编译器的活只能交给 CI——这一点已经被打脸两次。具体踩过的坑见文末「踩坑记录」。
+> **2026-10-23 更正**：本节原写「不要在本地编译验证 / 不要运行 ./gradlew」，
+> 理由是 gradle wrapper 下载被 SSL 拦截、必定失败。**这条已不成立**——本地已完整跑通
+> `:search:compileDebugKotlin`、`:app:compileDebugKotlin`、`:app:assembleDebug`，
+> 并产出三个 APK。原先的问题全部有解，见下面「本地构建」。
+> 完整踩坑过程见 `_rescue/本地构建与修复批次-2026-10-23.md`（仓库外）。
+
+### 首选：本地编译（现在可用，比 CI 快且不受 Actions 状态影响）
+
+```bash
+export GRADLE_USER_HOME="C:\Users\19535\.gradle"
+cd "D:\时纾\rikkahub\rikkahub-master"
+./gradlew.bat :search:compileDebugKotlin --console=plain   # 约 3 分钟
+./gradlew.bat :app:compileDebugKotlin    --console=plain   # 首次约 18 分钟，之后走缓存
+./gradlew.bat :app:assembleDebug         --console=plain   # 产物在 app/build/outputs/apk/debug/
+```
+
+本地构建依赖（**都在仓库外，换机器或清缓存后会复发**）：
+
+| 依赖 | 位置 / 说明 |
+|:--|:--|
+| Android SDK | `D:\android-sdk`；需要 `platforms/android-37.0`、`platforms/android-37.2`、`build-tools/37.0.0`、`platform-tools`、`cmake/3.22.1` |
+| SDK 路径 | `local.properties` 里 `sdk.dir=D\:\\android-sdk`（该文件不进仓库） |
+| Gradle 9.6.0 | `~/.gradle/wrapper/dists/gradle-9.6.0-bin/42k10rwplmzkhuboz9kdazi7s/`（需解压 + `.ok` 标记）。AGP 9.4.0 **强制** ≥9.6.0，本地原有的 9.4.1 不够 |
+| Google Maven 镜像 | `~/.gradle/init.d/google-mirror.gradle`（`dl.google.com:443` 不通，重定向到阿里云；不进仓库） |
+
+几个已知卡点，遇到了直接照此处理：
+
+- **`dl.google.com` Connection timed out** —— 不是证书问题。Java 直连 `plugins.gradle.org` 是 200，
+  只有 Google Maven 挂。用上面的 init script 重定向。
+- **`Failed to find Platform SDK with path: platforms;android-37.2`** ——
+  `app/build.gradle.kts` 写的是 `compileSdk { version = release(37) { minorApiLevel = 2 } }`，
+  需要 37.2，而镜像的 sdkmanager 只认到 37.0。手动取 `platform-37.2_r01.zip` 解压到
+  `platforms/android-37.2` 并补 `package.xml`。
+- **`[CXX1300] CMake '3.22.1' was not found`** —— `workspace` 模块有 native 代码
+  （`workspace/src/main/cpp/CMakeLists.txt`）。从镜像取 `cmake-3.22.1-windows.zip`，
+  解压到 `cmake/3.22.1/`（注意要带版本号目录，zip 内没有顶层目录）。
+- **`kotlin-dsl:6.6.4` 解析不到** —— 多半是 daemon 残留的旧状态，`./gradlew.bat --stop` 后重跑即可。
+
+### 操作注意
+
+- **不要留僵尸 Gradle 任务**：日志写完但进程不退出的构建会与后续任务抢同一个 daemon 和内存，
+  整机明显卡顿。先 `./gradlew.bat --stop`，再单独跑一个任务。
+- **不要用 `job_kill` 杀构建进程**：它和别的构建共用 daemon，杀掉会让
+  `assembleDebug` 报 `Gradle build daemon disappeared unexpectedly`。
+- 一次只跑一个 Gradle 任务。
+
+### 备选：GitHub Actions
+
+改动推上去由 CI 跑编译与打包。推送走 `_rescue/api_push.py`（Git Data API），
+因为 `github.com:443` 的 OpenSSL 证书验证失败；原生 `git push` 配 `GIT_SSL_NO_VERIFY=1` 也可行。
+
+**但注意（2026-10-23 起）**：`cacure-sys/rikkahub` 的 Actions 目前**不可用**。
+`actions/permissions` 返回 `enabled:true`、仓库设置里「Allow all actions」也已选，
+但 dispatch 一律 422 `Actions has been disabled for this repository`，push 后零 run，
+且**该账号下所有 fork 仓库 runs 全为 0**。判定为**账号级风险标记**（同时封 Actions runner 与
+第三方 OAuth，保留 git push），只能走 https://support.github.com/contact/reinstatement 人工解，
+普通工单会被自动关闭。最后一条成功 run 是 2026-10-14 21:29 UTC。
+
+### 结论口径
+
+- **编译/类型是否正确 → 本地编译说了算**（现在能跑，别再靠 CI 猜）。
+- **静态检查（grep / `_rescue/check_*.py`）只覆盖**括号平衡、符号存在、符号作用域链、图标 import；
+  类型匹配、重载选择、Kotlin 语法细节这些**只有编译器能判**。
+- **运行时行为（数据库迁移、UI 交互）本地编译同样证明不了**，只有真机能证。
+  迁移链只在真机首次启动时真正执行。
 
 ## Project Overview
 
@@ -101,7 +161,9 @@ Built with Jetpack Compose, Kotlin, and follows Material Design 3 principles.
 ## 踩坑记录
 
 只记**实际踩过、且 CI 或真机给出过证据**的坑。每条是「症状 → 证据 → 规则」。
-约定：**CI 绿了才算完**——本地静态检查通过只代表括号平衡、符号存在、作用域链没断。
+约定：**编译器绿了才算完**——本地静态检查通过只代表括号平衡、符号存在、作用域链没断。
+（2026-10-23 前是「CI 绿了才算完」，因为本地编译跑不起来；现在本地能跑，口径改为
+「编译通过 + 真机验证」，不再依赖 CI。）
 
 ### 1. 编译类：本地检查过了、CI 还是红
 
@@ -134,8 +196,12 @@ Built with Jetpack Compose, Kotlin, and follows Material Design 3 principles.
 
 - **症状**：连续两次"本地全绿" → CI 连续两次红（1.2、1.3）。
 - **规则**：本地检查只能覆盖：括号/圆括号平衡、符号是否存在、符号的作用域链、图标 import。
-  凡是"类型是否匹配、重载是否选中、Kotlin 语法细节"的活，只能交给 CI。
-  因此**不要提前宣布"好了"**；正确的说法是"已推送，等 Debug Build"。
+  凡是"类型是否匹配、重载是否选中、Kotlin 语法细节"的活，**只有编译器能判**——
+  而编译器现在本地就能跑（见文首「本地编译」），所以这类活交给
+  `./gradlew.bat :app:compileDebugKotlin`，不要靠 CI、也不要靠猜。
+  正确的说法是"已编译通过"（附任务名与耗时），不是"应该没问题"。
+- **2026-10-23 补充**：这条原来写「只能交给 CI」。当时本地编译跑不起来，只能等 CI；
+  现在本地能跑，口径改为「交给本地编译器」。CI 只在本地环境损坏时才作为备选。
 
 #### 1.5 LazyColumn 的 item 里"提前 return"会留下假空白
 
