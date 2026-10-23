@@ -8,6 +8,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
@@ -389,6 +391,69 @@ internal fun TavilyOptions(
                     Text(depth.replaceFirstChar { it.uppercase() })
                 }
             }
+        }
+    }
+
+    // 引擎综述开关：关掉之后模型只能读 items 里的网页原文片段，不会照抄引擎的二手转述
+    FormItem(
+        label = {
+            Text("引擎综述")
+        }
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "把 Tavily 生成的 answer 一并交给模型",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    text = "开启后模型容易直接照抄这段综述、跳过网页原文；建议关闭",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Spacer(modifier = Modifier.width(8.dp))
+            Switch(
+                checked = options.includeAnswer,
+                onCheckedChange = {
+                    onUpdateOptions(options.copy(includeAnswer = it))
+                }
+            )
+        }
+    }
+
+    FormItem(
+        label = {
+            Text("允许模型限定来源")
+        }
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "include_domains / time_range",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    text = "让模型能指定 arxiv.org、官方文档、最近一周等约束",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Spacer(modifier = Modifier.width(8.dp))
+            Switch(
+                checked = options.allowDomains,
+                onCheckedChange = {
+                    onUpdateOptions(options.copy(allowDomains = it, allowTimeRange = it))
+                }
+            )
         }
     }
 }

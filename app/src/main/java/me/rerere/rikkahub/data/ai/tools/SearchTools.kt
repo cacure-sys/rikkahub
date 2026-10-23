@@ -33,6 +33,15 @@ fun createSearchTools(settings: Settings): Set<Tool> {
                     Generate focused keywords and run multiple searches if needed.
                     Today is ${LocalDate.now().toLocalString(true)}.
 
+                    Query language:
+                    - Write the query as 2-8 keywords, not a full sentence.
+                    - Default to English even when the user writes in Chinese: most indexes are
+                      English-first, and a Chinese query returns fewer, less relevant hits that
+                      tempt you to invent a complete-looking answer from thin results.
+                    - Use Chinese only when the topic exists only in Chinese (domestic policy,
+                      Chinese community discussion, Chinese-only docs). Keep proper nouns verbatim.
+                    - The answer language still follows the user; only the query changes language.
+
                     Response format:
                     - retrievedAt is the local retrieval time, never a publication date
                     - items[].id (short id), index, title, url, publishedDate (if supplied), highlights (if supplied), text

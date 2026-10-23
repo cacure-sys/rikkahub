@@ -2,6 +2,7 @@ package me.rerere.rikkahub.ui.pages.chat
 
 import android.net.Uri
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -567,7 +568,18 @@ private fun ChatPageContent(
             show = bulkDeleteTargets.isNotEmpty(),
             title = "删除 ${bulkDeleteTargets.size} 条消息",
             text = {
-                Text("这些消息会从数据库里永久删除，找不回来。归档是可逆的，删除不是。")
+                // 选中集合里可能含归档原文（展开态下可选）。归档消息在当前折叠状态下不一定可见，
+                // 所以要把其中有多少条是归档单独点出来，别让用户不知道自己正在删什么。
+                val archivedInTargets = bulkDeleteTargets.count { it.archived }
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("这些消息会从数据库里永久删除，找不回来。归档是可逆的，删除不是。")
+                    if (archivedInTargets > 0) {
+                        Text(
+                            "其中 $archivedInTargets 条是已归档的原文（压缩时被折叠、默认不显示）。",
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                }
             },
             confirmText = "删除",
             dismissText = "取消",

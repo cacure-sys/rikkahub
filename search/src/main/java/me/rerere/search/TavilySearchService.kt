@@ -9,6 +9,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
@@ -47,7 +48,13 @@ object TavilySearchService : SearchService<SearchServiceOptions.TavilyOptions> {
             properties = buildJsonObject {
                 put("query", buildJsonObject {
                     put("type", "string")
-                    put("description", "search keyword")
+                    put(
+                        "description",
+                        "search keywords, 2-8 terms, not a full sentence. " +
+                            "Use English by default and keep proper nouns verbatim; " +
+                            "use Chinese only when the topic exists only in Chinese " +
+                            "(domestic policy, Chinese community, Chinese-only docs)."
+                    )
                 })
                 put("topic", buildJsonObject {
                     put("type", "string")
@@ -58,6 +65,25 @@ object TavilySearchService : SearchService<SearchServiceOptions.TavilyOptions> {
                         add("finance")
                     })
                 })
+                if (options.allowDomains) {
+                    put("include_domains", buildJsonObject {
+                        put("type", "array")
+                        put("description", "restrict to these domains, e.g. arxiv.org, official docs")
+                        put("items", buildJsonObject { put("type", "string") })
+                    })
+                }
+                if (options.allowTimeRange) {
+                    put("time_range", buildJsonObject {
+                        put("type", "string")
+                        put("description", "only results published in this window")
+                        put("enum", buildJsonArray {
+                            add("day")
+                            add("week")
+                            add("month")
+                            add("year")
+                        })
+                    })
+                }
             },
             required = listOf("query")
         )
@@ -92,8 +118,24 @@ object TavilySearchService : SearchService<SearchServiceOptions.TavilyOptions> {
                 put("max_results", commonOptions.resultSize)
                 put("search_depth", serviceOptions.depth.ifEmpty { "advanced" })
                 put("topic", topic)
-                put("include_answer", "advanced")
+                // 综述是引擎对结果的二手转述，默认可关：模型拿到它就容易照抄，绕开网页原文
+                if (serviceOptions.includeAnswer) {
+                    put("include_answer", "advanced")
+                } else {
+                    put("include_answer", false)
+                }
                 put("include_images", true)
+
+                // include_domains 在 schema 里是数组，但有的模型会塞成逗号串，两种都收
+                params["include_domains"]?.let { raw ->
+                    val domains: List<String> = parseDomainList(raw)
+                    if (domains.isNotEmpty()) {
+                        put("include_domains", buildJsonArray { domains.forEach { add(it) } })
+                    }
+                }
+                params["time_range"]?.jsonPrimitive?.contentOrNull
+                    ?.takeIf { it in listOf("day", "week", "month", "year") }
+                    ?.let { put("time_range", it) }
             }
             val apiKey = keyRoulette.next(serviceOptions.apiKey, serviceOptions.id.toString())
 
@@ -110,7 +152,8 @@ object TavilySearchService : SearchService<SearchServiceOptions.TavilyOptions> {
 
                 return@withContext Result.success(
                     SearchResult(
-                        answer = response.answer,
+                        // 关掉综述时即使引擎仍回了 answer（旧缓存/服务端兜底），也不往上下文里塞
+                        answer = response.answer.takeIf { serviceOptions.includeAnswer },
                         items = response.results.map {
                             SearchResultItem(
                                 title = it.title,
@@ -194,4 +237,22 @@ object TavilySearchService : SearchService<SearchServiceOptions.TavilyOptions> {
         @SerialName("raw_content")
         val rawContent: String,
     )
+}
+
+/**
+ * 解析模型传进来的域名限制。
+ *
+ * schema 里 `include_domains` 是数组，但实测有的模型会塞成逗号串甚至换行串，
+ * 所以先按数组解，失败再按分隔符切。两种都不是时返回空列表（等于不限制来源）。
+ */
+private fun parseDomainList(raw: JsonElement): List<String> {
+    val fromArray = runCatching {
+        raw.jsonArray.mapNotNull { it.jsonPrimitive.contentOrNull }
+    }.getOrNull()
+    val values: List<String> = fromArray ?: (
+        raw.jsonPrimitive.contentOrNull
+            ?.split(',', ' ', '\n')
+            ?: emptyList()
+        )
+    return values.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
 }

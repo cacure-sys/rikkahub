@@ -199,6 +199,13 @@ sealed class SearchServiceOptions {
         override val id: Uuid = Uuid.random(),
         val apiKey: String = "",
         val depth: String = "advanced",
+        // 引擎自带的综述（Tavily 的 answer 字段）默认关闭：
+        // 它是 Tavily 对结果的二手转述，语种跟随 query，模型很容易直接照抄，
+        // 用户看到的就是"中文提问 → 中文综述"，全程没有网页原文。
+        val includeAnswer: Boolean = false,
+        // 让模型能对检索施加来源/时间约束（原来只暴露 query/topic，没有抓手）
+        val allowDomains: Boolean = true,
+        val allowTimeRange: Boolean = true,
     ) : SearchServiceOptions()
 
     @Serializable

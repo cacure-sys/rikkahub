@@ -63,7 +63,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -111,6 +113,23 @@ import kotlin.uuid.Uuid
 private const val TAG = "ChatList"
 private const val LoadingIndicatorKey = "LoadingIndicator"
 private const val ScrollBottomKey = "ScrollBottomKey"
+
+/**
+ * 多选集合的 Saver：把 `mutableStateListOf<Uuid>()` 存成 String 列表。
+ *
+ * Compose 没有为 SnapshotStateList 提供内置 Saver，而 Uuid 本身不是 Bundle 可存类型，
+ * 所以先转成字符串；读取时跳过解析失败的脏数据，避免一条坏 id 让整个会话崩在恢复阶段。
+ */
+private val SelectedIdsSaver: Saver<SnapshotStateList<Uuid>, ArrayList<String>> = Saver(
+    save = { list -> ArrayList(list.map { it.toString() }) },
+    restore = { saved ->
+        mutableStateListOf<Uuid>().apply {
+            saved.forEach { raw ->
+                runCatching { Uuid.parse(raw) }.getOrNull()?.let { add(it) }
+            }
+        }
+    },
+)
 
 @Composable
 fun ChatList(
@@ -302,8 +321,12 @@ private fun ChatListNormal(
     }
 
     // 聊天选择
-    val selectedItems = remember { mutableStateListOf<Uuid>() }
-    var selecting by remember { mutableStateOf(false) }
+    // 必须 saveable：转屏 / 切换深色模式 / 进程被系统回收后重建，
+    // 普通 remember 会把选择模式和选中集合清零，用户勾了几十条就全丢了。
+    val selectedItems = rememberSaveable(conversation.id, saver = SelectedIdsSaver) {
+        mutableStateListOf<Uuid>()
+    }
+    var selecting by rememberSaveable(conversation.id) { mutableStateOf(false) }
     var showExportSheet by remember { mutableStateOf(false) }
 
     // 自动跟随键盘滚动
@@ -332,6 +355,18 @@ private fun ChatListNormal(
     // 按会话 id 记住状态，切会话回到默认收起。
     var archivedExpanded by rememberSaveable(conversation.id) { mutableStateOf(false) }
     val archivedCount = conversation.messageNodes.count { it.archived }
+    // 屏幕上真正渲染出来的节点：收起态下归档消息除区块首条外都被早退跳过（不组合、不可点）。
+    // 「全选」必须只覆盖这份清单，否则会选中看不见的归档原文 → 批量删除误删。
+    val visibleNodes = remember(conversation.messageNodes, archivedExpanded) {
+        val nodes = conversation.messageNodes
+        if (archivedExpanded) {
+            nodes
+        } else {
+            nodes.filterIndexed { index, node ->
+                !node.archived || index == 0 || !nodes[index - 1].archived
+            }
+        }
+    }
 
     Box(
         modifier = Modifier
@@ -559,7 +594,12 @@ private fun ChatListNormal(
                                 if (selectedItems.isNotEmpty()) {
                                     selectedItems.clear()
                                 } else {
-                                    selectedItems.addAll(conversation.messageNodes.map { it.id })
+                                    // 只选屏幕上真正看得见的节点：收起态下归档消息被早退跳过、
+                                    // 根本不组合也不渲染。若在这里把 messageNodes 全量塞进去，
+                                    // 用户会连带选中看不见的归档原文，再点删除就误删了。
+                                    selectedItems.addAll(
+                                        visibleNodes.map { it.id }
+                                    )
                                 }
                             }
                         ) {

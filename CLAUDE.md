@@ -137,6 +137,20 @@ Built with Jetpack Compose, Kotlin, and follows Material Design 3 principles.
   凡是"类型是否匹配、重载是否选中、Kotlin 语法细节"的活，只能交给 CI。
   因此**不要提前宣布"好了"**；正确的说法是"已推送，等 Debug Build"。
 
+#### 1.5 LazyColumn 的 item 里"提前 return"会留下假空白
+
+- **症状**（这条是**改之前就避开的，不是 CI 打脸出来的**）：折叠归档原文时，最直觉的写法是在 item 里
+  `if (不显示) return@itemsIndexed`。但那样**每个被跳过的 item 仍然会组合出一个空 `Column`**，
+  而 `LazyColumn` 的 `verticalArrangement = Arrangement.spacedBy(12.dp)` 会逐条攒间距 →
+  31 条归档 = **372dp 的假空白**（不是内容，是间距）。
+- **依据**（Kotlin/Compose 规则本身，不是猜的）：
+  1. 早退要发生在**建 `Column` 之前**，被跳过的 item 才完全不入组合；
+  2. 首条归档消息（要显示胶囊的那条）不能在包裹容器里 `return@itemsIndexed` ——
+     `Column` 的 content 是 `@Composable` lambda、**不是 inline**，里面写 `return@itemsIndexed` 直接编译不过；
+     所以那一处用 `if/else` 而不是 return。
+- **规则**：在 `LazyColumn` 的 item 里"隐藏某些条目"时，把判断提到所有包裹容器之前；
+  想用 return 跳过内容时，先确认那个 lambda 是不是 inline 的。
+
 ### 2. 网络与推送
 
 #### 2.1 `git push` 会间歇性连不上
@@ -222,3 +236,26 @@ Built with Jetpack Compose, Kotlin, and follows Material Design 3 principles.
 | `watch_ci.ps1` | 后台盯 CI（纯 ASCII，20 分钟兜底退出） |
 | `check_ui_batch.py` | 撤销压缩 UI 那批的接线断言 + 图标 import 自查 |
 | `check_scope.py <relpath> <symbol>` | **符号作用域链检查**：用到它的函数是否都声明了它 |
+| `check_collapse.py` | 归档折叠那批的接线断言（含"早退必须在 Column 之前"） |
+| `check_bulk.py` | 多选批量归档/删除那批的接线断言（含确认框的 `text` 必须是 @Composable lambda） |
+| `scan_icons.py` | 列出 app 里实际用过的全部 HugeIcons 名称——**选图标前先看它**，别猜出不存在的名字 |
+| `fetch_artifact.py <run_id> <artifact> <outdir>` | 从 CI 下产物到本地并打印 sha256（重定向时摘鉴权头，同 `ci_log2.py`） |
+
+### 8. 沙箱与环境：所有 pwsh 突然全挂
+
+- **症状**：连 `"pwsh alive"` 都返回 `SetNamedSecurityInfoW failed (Win32 5): grantWrite(D:\时纾)`。
+  grep / 读文件正常，但任何 `pwsh` 命令都跑不起来。
+- **证据链**：`D:\时纾` 缺 **WRITE_OWNER**（`writeDac=true / writeOwner=false`），
+  DSH 给工作区划权限时正好卡在这一步。用环境自带的 `diagnose-windows-sandbox-acl` 技能脚本
+  （`-Path` / `-AllowRoot` / `-Out`，并以"不受限"方式跑它）能修：备份原权限 → 补当前账户完全控制 →
+  打印撤销命令，复核到 `writeOwner: false → true` 才算成功。**one path per invocation**，
+  一层修不好就对更深的那层再跑一次（当时连跑了两层：`D:\时纾` → `rikkahub-master`）。
+- **修完仍然写不进去**：`D:\时纾` 带着**低完整性标签**（`LOW_LABEL=True`），子目录却是 `lowLabel:null`。
+  这时拦人的已经不是目录权限，而是**沙箱的完整性限制** —— 那个脚本只写权限、不碰标签，
+  **再跑多少次都没用，不要循环跑**。
+- **判据**（怎么分清是哪种）：agent 的文件编辑工具能写、`git status` 能读，
+  但受限 `pwsh` 写 `.git` 报 `Unable to create '.git/index.lock': Permission denied`
+  → 是**沙箱写入限制**，不是文件损坏、也不是残留锁文件（先 `Get-ChildItem -Filter *.lock` 确认没有残留锁，
+  再去动权限）。当时的 `git commit` 就是这么失败的。
+- **出路**：把会话文件策略切成不受限（`danger-full-access`）后，同一条命令**一次就过**。
+  被拒绝后不要换别的路子绕。

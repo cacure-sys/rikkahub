@@ -647,12 +647,24 @@ class ChatService(
                     !msg.isCompressedSummary()
                 }
                 if (regularCount > assistant.autoCompressThreshold) {
-                    Logging.log(TAG, "Auto-compress triggered before generation: $regularCount messages")
+                    // keepRecent 必须严格小于阈值，否则 messagesToCompress 为空、
+                    // compressConversation 会走「消息不够」分支，自动压缩静默失效
+                    // （阈值 UI 允许设到 1，而默认 keepRecent 是 32，正好落进这个死区）。
+                    // 阈值很小时按比例收窄，但至少保留 1 条：keepRecent = 0 会让
+                    // compressConversation 走"全部压缩"分支，会话一条上下文都不剩，对话当场断。
+                    val threshold = assistant.autoCompressThreshold.coerceAtLeast(1)
+                    val keepRecent = minOf(
+                        AUTO_COMPRESS_KEEP_RECENT,
+                        (threshold - 1).coerceAtLeast(1),
+                    )
+                    Logging.log(TAG, "Auto-compress triggered before generation: $regularCount messages, keepRecent=$keepRecent")
                     compressConversation(
                         conversationId = conversationId,
                         conversation = conversation,
                         additionalPrompt = "",
-                        keepRecentMessages = AUTO_COMPRESS_KEEP_RECENT,
+                        keepRecentMessages = keepRecent,
+                        // 自动压缩就跑在生成 job 内，必须放行，否则这道保护会让自动压缩永不生效
+                        allowDuringGeneration = true,
                     ).onFailure {
                         // 以前这里只 printStackTrace：失败后会话保持全量，用户看到的就是"压缩了还是全量"
                         Logging.log(TAG, "Auto-compress 失败（本次生成沿用未压缩历史）: ${it.javaClass.simpleName}: ${it.message}")
@@ -964,12 +976,27 @@ class ChatService(
 
     // ---- 压缩对话历史 ----
 
+    /**
+     * 压缩对话历史。
+     *
+     * @param allowDuringGeneration 允许在生成 job 内部调用。
+     *   自动压缩是在 [handleMessageComplete] 里、生成 job 尚未结束时触发的，那里必须为 true；
+     *   手动压缩（用户点按钮）必须为 false —— 否则用户可以在生成中途插队压缩，
+     *   而生成循环正按下标回写消息，插入/归档节点会让回复落到错误的节点上。
+     */
     suspend fun compressConversation(
         conversationId: Uuid,
         conversation: Conversation,
         additionalPrompt: String,
         keepRecentMessages: Int = 32,
+        allowDuringGeneration: Boolean = false,
     ): Result<Unit> = runCatching {
+        val session = sessionManager.get(conversationId)
+        // 手动路径：生成中一律拒绝（同单条删除的规则）
+        check(allowDuringGeneration || session?.isGenerating != true) {
+            context.getString(R.string.chat_page_compress_blocked_generating)
+        }
+
         val settings = settingsStore.settingsFlow.first()
         val model = settings.findModelById(settings.compressModelId)
             ?: settings.getCurrentChatModel()
@@ -1009,6 +1036,12 @@ class ChatService(
             messagesToCompress = regularEntries
             messagesToKeep = emptyList()
         }
+
+        // 待处理的工具调用不能压：生成循环只从最后一条消息恢复工具调用，
+        // 被摘要覆盖并归档之后就再也不会执行（upstream bf614d89 的同一道保护）
+        check(messagesToCompress.none { entry ->
+            entry.value.getTools().any { it.isPending || it.canResumeExecution }
+        }) { context.getString(R.string.chat_page_compress_pending_tools) }
 
         // 按字符切块：原来按"每块 256 条"切，单块输入可达 256×2000 字符，极易撑爆压缩模型上下文
         val chunks = splitMessagesByChars(messagesToCompress, MAX_COMPRESS_INPUT_CHARS)
